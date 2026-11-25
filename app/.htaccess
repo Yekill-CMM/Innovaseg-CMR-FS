@@ -1,0 +1,28 @@
+# CRM Comercial - configuración para hosting cPanel (Apache)
+# Forzar HTTPS
+RewriteEngine On
+RewriteCond %{HTTPS} off
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Evitar que buscadores indexen el CRM
+<IfModule mod_headers.c>
+  Header set X-Robots-Tag "noindex, nofollow"
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "same-origin"
+  Header set X-Frame-Options "SAMEORIGIN"
+</IfModule>
+
+# Sin listado de carpeta
+Options -Indexes
+DirectoryIndex index.html
+
+# Bloquear acceso directo a archivos internos
+<FilesMatch "^(config\.php|almacen\.php|almacen\.log|\.lock|.*\.json\.php|.*\.tmp|.*\.db.*)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>

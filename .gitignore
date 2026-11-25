@@ -1,2 +1,31 @@
+# Respaldos y exportaciones con datos comerciales reales: nunca al repositorio
+*.json
+*.xlsx
+*.xls
+*.csv
+respaldos/
+
+# Sistema y editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Futuro proyecto Next.js / Supabase
 node_modules/
+.next/
+out/
 .env
+.env.*
+!.env.example
+supabase/.temp/
+
+# Datos guardados por el servidor (crm.json.php, historial, lock): nunca al repositorio
+app/datos/*
+!app/datos/.htaccess
+__pycache__/
+
+# Excepciones del CRM FS: archivos JSON del proyecto, sin datos reales
+!package.json
+!pruebas/package.json
+!config/config-crm.default.json
