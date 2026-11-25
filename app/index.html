@@ -669,7 +669,7 @@ function seed(){
   {id:'of4',code:'OF-2026-022',oppId:'o7',ownerId:'u3',status:'Aceptada',sentAt:addDays(-20),validUntil:addDays(10),createdAt:addDays(-25),versions:[V(1,216000000,-20,'Versión inicial',true)]},
   {id:'of5',code:'OF-2026-035',oppId:'o4',ownerId:'u3',status:'Borrador',sentAt:'',validUntil:'',createdAt:addDays(-1),versions:[V(1,64000000,-1,'En preparación',false)]}];
  return {v:2,mode:'demo',lastBackup:'',plans:[plan],users,currentUser:'u1',companies,contacts,leads,opps,activities,tasks,offers,
-  config:{uf:39800,usd:950,followup:{remind:3,yellow:7,red:14},oppNoAct:{warn:10,risk:20},leadNoAct:14,stalledDays:30,offerExpiry:5,targets:{u1:200000000,u3:250000000}},
+  config:{...configDefault(),targets:{u1:200000000,u3:250000000}},
   audit:[{id:uid('au'),at:addDays(-2)+' 14:32',userId:'u1',entity:'Oferta OF-2026-034',field:'Monto',oldV:'$292.000.000',newV:'$286.000.000'}],
   seq:{opp:18,offer:35}};
 }
@@ -681,7 +681,10 @@ let S;
    o 'crm-ajustes' en este navegador), aparte del programa y de los datos. Así no se pierden al
    actualizar index.html, restaurar un respaldo o empezar de cero. Los parámetros nuevos de una
    versión futura toman su valor por defecto sin tocar los ya definidos. */
-const CONFIG_DEFAULT={auto:{on:1,noTask:1,idle:1,follow:1,stage:1},clientNoAct:15,plazos:{},uf:39800,usd:950,followup:{remind:3,yellow:7,red:14},oppNoAct:{warn:10,risk:20},leadNoAct:14,stalledDays:30,offerExpiry:5,targets:{},metaBase:'factura'};
+/* Valores por defecto del CRM FS: son los de config/config-crm.default.json (la prueba
+   pruebas/config.test.js revisa que coincidan). Cambia los dos juntos. */
+const CONFIG_DEFAULT={auto:{on:1,noTask:1,idle:1,follow:1,stage:1},clientNoAct:30,plazos:{'One Shot':{warn:30,risk:60,remind:20,yellow:25,red:30,stalled:90}},uf:41200,usd:950,followup:{remind:3,yellow:7,red:14},oppNoAct:{warn:10,risk:20},leadNoAct:14,stalledDays:30,offerExpiry:15,targets:{},metaBase:'factura'};
+const configDefault=()=>JSON.parse(JSON.stringify(CONFIG_DEFAULT));
 const AJ_KEY='crm-ajustes';
 let AJUSTES=(()=>{try{return JSON.parse(localStorage.getItem(AJ_KEY)||'null')}catch(e){return null}})();
 const isObj=v=>v&&typeof v==='object'&&!Array.isArray(v);
@@ -962,7 +965,7 @@ async function downloadCSV(name,rows){
  const r=await fileSave(name,toCSV(rows));
  if(r==='ok')toast('Archivo descargado. Ábrelo directamente en Excel.');else if(r==='declined')toast('Descarga cancelada.');else if(r==='busy')toast('Ya hay una descarga esperando tu confirmación.');else toast('La descarga no está disponible en esta vista. Usa «Copiar para Excel».');
 }
-function cleanSeed(){const base=seed();const u={id:'u1',name:byId(S.users,'u1')?.name||'Claudio Méndez',role:'admin',roleLabel:'Business Developer (administrador)'};S.users=[u];const p=makePlan('Retail',nextMonth(),'u1');return{v:5,mode:'real',lastBackup:'',plans:[p],users:[u],currentUser:'u1',companies:[],contacts:[],leads:[],opps:[],activities:[],tasks:[],offers:[],invoices:[],recepciones:[],config:{...base.config,targets:{u1:base.config.targets.u1}},audit:[],seq:{opp:0,offer:0,lead:0}}}
+function cleanSeed(){const base=seed();const u={id:'u1',name:byId(S.users,'u1')?.name||'Claudio Méndez',role:'admin',roleLabel:'Business Developer (administrador)'};S.users=[u];const p=makePlan('Retail',nextMonth(),'u1');return{v:5,mode:'real',lastBackup:'',plans:[p],users:[u],currentUser:'u1',companies:[],contacts:[],leads:[],opps:[],activities:[],tasks:[],offers:[],invoices:[],recepciones:[],config:configDefault(),audit:[],seq:{opp:0,offer:0,lead:0}}}
 const UI={repFactYear:null,repFactState:'',repConvYear:'',repTab:'opps',prGran:'semana',prPer:'',repGran:'mes',repPer:'',leadPlan:'',leadStage:'',leadGrade:'',leadView:'kanban',leadCompany:'',actCompany:'',taskCompany:'',taskKind:'',oppView:'kanban',oppYear:'',oppOwner:'',oppStatus:'abierta',oppIndustry:'',actType:'',actUser:'',compInd:'',compRel:'',taskScope:'mine',planVert:'',planSel:{}};
 let CUR=null;
 

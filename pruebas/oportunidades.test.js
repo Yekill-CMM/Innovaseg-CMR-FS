@@ -198,7 +198,10 @@ ok(E(`S.tasks.some(t=>t.auto==='sin-gestion:'+S.opps.find(o=>o.code==='CM-261101
 ok(E(`plazo(S.opps.find(o=>o.code==='CM-261101-01')).remind`) === 3, 'lo no definido en el tipo toma el plazo general');
 E(`location.hash='config';render()`);
 ok(doc.querySelector('input[name="p_0_warn"]').value === '30' && /Plazos por tipo de negocio/.test(visible()), 'la tabla de plazos por tipo está en Configuración');
-// Cliente sin gestión (umbral 15)
+// Cliente sin gestión: con el umbral por defecto del CRM FS (30 días), 20 días aún no alertan
+ok(E('S.config.clientNoAct') === 30 && !E(`computeAlerts().some(a=>a.group==='cliente')`), 'con el umbral por defecto (30 días), 20 días sin gestión aún no generan alerta');
+// Con umbral 15
+E(`S.config.clientNoAct=15`);
 const cl = E(`JSON.parse(JSON.stringify(computeAlerts().filter(a=>a.group==='cliente').map(a=>a.title)))`);
 ok(cl.includes('APRO') && cl.includes('ENEL'), 'clientes con oportunidades abiertas y 20 días sin gestión: alerta "Cliente sin gestión"');
 ok(!cl.includes('MICROSECUR'), 'un cliente sin oportunidades abiertas ni prospectos activos no genera alerta');

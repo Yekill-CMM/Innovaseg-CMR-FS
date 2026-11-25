@@ -8,6 +8,7 @@ npm install
 npm test
 ```
 
+- `config.test.js`: la configuración por defecto de `app/index.html` es igual a `config/config-crm.default.json`, una instalación nueva y la demo parten con esos valores y lo que se cambia en Configuración manda sobre ellos.
 - `importador.test.js`: importa varios funnels seguidos y verifica que nada se borre, que las oportunidades ausentes queden marcadas, que la marca se quite sola cuando vuelven y que las oportunidades creadas a mano no se toquen. Al final deja un archivo de datos de prueba en la carpeta temporal.
 - `pantallas.test.js`: genera la vista previa de importación, el Kanban, la ficha y Hoy, y revisa los avisos y que no haya errores de JavaScript.
 - `sincro.test.js`: al abrir, una copia vieja del navegador no pisa lo que hay en el servidor; solo se suben cambios pendientes hechos sobre la misma revisión.
