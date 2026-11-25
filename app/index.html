@@ -49,6 +49,7 @@ header.top{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:0 1
 .gresults .gr:hover,.gresults .gr:focus{background:var(--surface-2)}
 .user-sel{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:7px 8px;max-width:230px}
 .user-sel option{color:#15202B}
+button.user-sel{cursor:pointer;font:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .add-btn{margin-left:auto;white-space:nowrap}
 nav.side{background:var(--surface);border-right:1px solid var(--line);padding:14px 10px;overflow:auto;display:flex;flex-direction:column;gap:2px}
 nav.side a{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-radius:8px;color:var(--ink-2);text-decoration:none;font-weight:500}
@@ -299,6 +300,7 @@ nav.bottom{display:none}
     </div>
     <button class="btn pri add-btn" data-action="quick">+ Registrar actividad</button>
     <select id="userSel" class="user-sel" aria-label="Usuario activo"></select>
+    <button id="userChip" class="user-sel" data-action="miCuenta" hidden></button>
   </header>
   <nav class="side" id="side"></nav>
   <main id="main"></main>
@@ -756,7 +758,7 @@ function esReemplazo(){try{return localStorage.getItem(KEY+'-reemplazo')==='1'}c
 function save(){S.savedAt=Date.now();setPend(true);saveLocal();if(canSync())queueRemote();else setSync(STORE.status)}
 function syncText(){
  if(STORE.mode==='conectando')return 'Conectando con el guardado…';
- if(STORE.mode==='clave')return 'Sin sincronizar: falta la clave del servidor. Ingrésala en Configuración.';
+ if(STORE.mode==='clave')return 'Sin sincronizar: falta entrar con tu usuario.';
  if(STORE.mode==='navegador')return 'Guardado solo en este navegador. Descarga un respaldo cada semana.';
  if(!canSync())return `Datos de ejemplo: no se suben ${STORE.mode==='servidor'?'al servidor':'al artefacto'}. Restaura tu respaldo o usa «Empezar con mis datos» en Configuración.`;
  if(STORE.status==='guardando')return `Guardando en ${lugar()}…`;
@@ -815,16 +817,15 @@ async function refreshFromRemote(){
 
 /* ---------- Guardado en el servidor propio (api.php en el hosting) ---------- */
 const API='api.php';
-const CLAVE_KEY='crm-clave';
-function getClave(){try{return localStorage.getItem(CLAVE_KEY)||''}catch(e){return ''}}
-function setClave(v){try{if(v)localStorage.setItem(CLAVE_KEY,v);else localStorage.removeItem(CLAVE_KEY)}catch(e){}}
+// Cada persona entra con su cuenta: la sesión va en una cookie HttpOnly (el programa no la ve) y cada petición lleva X-CRM: 1
+try{localStorage.removeItem('crm-clave')}catch(e){}   // clave compartida de la versión de una sola persona: ya no se usa
 // El cuerpo va comprimido (gzip): pesa ~85% menos y no lo bloquean los filtros del hosting (ModSecurity) que limitan o inspeccionan JSON grandes
 async function gzipBody(txt){
  if(typeof CompressionStream!=='function')return null;
  try{return await new Response(new Blob([txt]).stream().pipeThrough(new CompressionStream('gzip'))).blob()}catch(e){return null}
 }
 async function api(method,q,body){
- const headers={'Content-Type':'application/json','X-CRM-Clave':getClave()};let payload;
+ const headers={'Content-Type':'application/json','X-CRM':'1'};let payload;
  if(body){payload=JSON.stringify(body);const gz=await gzipBody(payload);if(gz){payload=gz;headers['Content-Type']='application/octet-stream';headers['X-CRM-Gzip']='1'}}
  const r=await fetch(API+(q||''),{method,headers,body:payload,cache:'no-store',credentials:'same-origin'});
  let j=null;try{j=await r.json()}catch(e){j=null}
@@ -834,11 +835,12 @@ async function connectServer(){
  if(!/^https?:$/.test(location.protocol)){STORE.mode='navegador';render();return}
  let r;try{r=await api('GET','?accion=leer')}catch(e){STORE.motivo='No se pudo contactar al servidor (¿sin internet o venció la sesión?).';STORE.mode='navegador';render();return}
  if(!r.j||r.status===404){STORE.motivo=r.status===404?'':'El servidor no respondió como se esperaba (¿venció la sesión de Cloudflare?). Recarga la página.';STORE.mode='navegador';render();return}          // no hay api.php
- if(r.status===401){STORE.mode='clave';render();pedirClave(getClave()?'La clave no es correcta. Revisa mayúsculas y minúsculas.':'');return}
+ if(r.status===401){STORE.mode='clave';render();pedirEntrada('');return}
  if(r.status===503){STORE.mode='navegador';render();toast(esc(r.j.error||'Falta configurar el servidor.'));return}
- if(r.status===429){STORE.mode='clave';render();pedirClave(r.j.error||'Demasiados intentos. Espera unos minutos.');return}
+ if(r.status===429){STORE.mode='clave';render();pedirEntrada(r.j.error||'Demasiados intentos. Espera unos minutos.');return}
  if(r.status!==200){STORE.motivo=r.status===403&&r.j&&r.j.error?r.j.error:'El servidor respondió con un error ('+r.status+'). No registres nada hasta que vuelva la conexión.';STORE.mode='navegador';render();return}
  STORE.mode='servidor';STORE.ready=true;STORE.rev=Number(r.j.rev)||0;STORE.almacen=r.j.almacen||null;STORE.remoteHas=!!r.j.data;
+ if(r.j.yo)aplicarSesion(r.j.yo,r.j.usuarios);
  if(reconcile(r.j.data,flushServer,'el servidor',STORE.rev)==='adopt'){adoptRemote({data:r.j.data});closeDrawer();avisoPrevio()}
  syncAjustes(r.j.ajustes);
  render();
@@ -852,17 +854,20 @@ function flushServer(){
    const reemp=esReemplazo();const r=await api('POST','',Object.assign({baseRev:STORE.rev||0,data:S},reemp?{reemplazo:true}:{}));
    if(r.status===200&&reemp){try{localStorage.removeItem(KEY+'-reemplazo')}catch(e){}}
    if(r.status===422&&r.j&&r.j.rechazo&&r.j.data){STORE.rev=Number(r.j.rev)||0;adoptRemote({data:r.j.data});render();setSync('ok');openModal(`<h1 style="font-size:20px">El servidor no aceptó el cambio</h1><p class="sm">${esc(r.j.error||'')}</p><p class="sm">Se cargó la versión del servidor, sin ese cambio.</p><div class="form-foot"><button class="btn pri" data-action="closeModal">Entendido</button></div>`);return}
+   if(r.status===200&&r.j&&Array.isArray(r.j.avisos)&&r.j.avisos.length&&r.j.data){STORE.rev=Number(r.j.rev)||0;adoptRemote({data:r.j.data});if(!STORE.timer)setPend(false);render();setSync('ok');openModal(`<h1 style="font-size:20px">Parte del cambio no se guardó</h1>${r.j.avisos.map(a=>`<p class="sm">${esc(a)}</p>`).join('')}<p class="sm">Lo demás quedó guardado. Se cargó la versión del servidor.</p><div class="form-foot"><button class="btn pri" data-action="closeModal">Entendido</button></div>`);return}
    if(r.status===200){STORE.rev=r.j.rev;STORE.remoteHas=true;try{localStorage.setItem(KEY+'-rev',String(STORE.rev))}catch(e){}if(!STORE.timer)setPend(false);setSync('ok');return}
    if(r.status===409&&r.j&&r.j.data){STORE.rev=Number(r.j.rev)||0;adoptRemote({data:r.j.data});render();setSync('ok');openModal('<h1 style="font-size:20px">Había cambios en otro dispositivo</h1><p class="sm">Mientras trabajabas aquí, se guardaron cambios desde otro dispositivo. Se cargó la versión más reciente del servidor. Revisa tu último cambio y, si no aparece, vuelve a hacerlo.</p><div class="form-foot"><button class="btn pri" data-action="closeModal">Entendido</button></div>');return}
-   if(r.status===401){STORE.mode='clave';STORE.ready=false;setSync('');render();pedirClave('La clave ya no es válida. Ingrésala de nuevo.');return}
+   if(r.status===401){STORE.mode='clave';STORE.ready=false;setSync('');render();pedirEntrada('Tu sesión terminó. Vuelve a entrar: tus cambios siguen en este navegador y se suben al entrar.');return}
+   if(r.status===403&&r.j&&r.j.error){setSync('');toast(esc(r.j.error));return}
    if(r.status===429){setSync('');toast(esc(r.j&&r.j.error||'Demasiados intentos. Espera unos minutos.'));return}
    throw new Error((r.j&&r.j.error)||(r.status===403||r.status===406||r.status===413?'El hosting bloqueó el guardado (código '+r.status+'). Revisa ModSecurity en cPanel.':'El servidor respondió con un error ('+r.status+').'));
   }catch(e){setSync('error',e)}
  })}
-async function refreshFromServer(){
- try{const r=await api('GET','?accion=rev');if(r.status!==200||!r.j)return;if(r.j.almacen)STORE.almacen=r.j.almacen;
+async function refreshFromServer(forzar){
+ try{const r=await api('GET','?accion=rev');if(r.status===401&&STORE.mode==='servidor'){STORE.mode='clave';STORE.ready=false;render();pedirEntrada('Tu sesión terminó. Vuelve a entrar.');return}
+  if(r.status!==200||!r.j)return;if(r.j.almacen)STORE.almacen=r.j.almacen;
   if(r.j.ajustes&&syncAjustes(r.j.ajustes))render();
-  if((Number(r.j.rev)||0)>(STORE.rev||0)){await STORE.queue;if(STORE.timer)return;const f=await api('GET','?accion=leer');if(f.status!==200||!f.j||!f.j.data)return;STORE.rev=Number(f.j.rev)||0;adoptRemote({data:f.j.data});render();toast('Datos actualizados con los cambios hechos en otro dispositivo.')}}catch(e){}
+  if(forzar===true||(Number(r.j.rev)||0)>(STORE.rev||0)){await STORE.queue;if(STORE.timer)return;const f=await api('GET','?accion=leer');if(f.status!==200||!f.j||!f.j.data)return;STORE.rev=Number(f.j.rev)||0;adoptRemote({data:f.j.data});if(f.j.yo)aplicarSesion(f.j.yo,f.j.usuarios);render();if(forzar!==true)toast('Datos actualizados con los cambios hechos por otra persona o en otro dispositivo.')}}catch(e){}
 }
 
 /* ---------- Chat con Joan (solo por Tailscale; api.php lo rechaza desde internet) ---------- */
@@ -870,7 +875,7 @@ var JOAN={on:false,abierto:false,hilo:'',msgs:[],esperando:null,KEY:'crm-joan-ch
 function joanCargar(){try{const j=JSON.parse(sessionStorage.getItem(JOAN.KEY)||'{}');JOAN.hilo=j.hilo||'';JOAN.msgs=Array.isArray(j.msgs)?j.msgs.slice(-60):[];JOAN.esperando=j.esperando||null}catch(e){}}
 function joanGuardar(){try{sessionStorage.setItem(JOAN.KEY,JSON.stringify({hilo:JOAN.hilo,msgs:JOAN.msgs.slice(-60),esperando:JOAN.esperando}))}catch(e){}}
 async function joanApi(method,q,body){
- const r=await fetch(API+q,{method,headers:{'Content-Type':'application/json','X-CRM-Clave':getClave()},body:body?JSON.stringify(body):undefined,cache:'no-store',credentials:'same-origin'});
+ const r=await fetch(API+q,{method,headers:{'Content-Type':'application/json','X-CRM':'1'},body:body?JSON.stringify(body):undefined,cache:'no-store',credentials:'same-origin'});
  let j=null;try{j=await r.json()}catch(e){}
  return{status:r.status,j:j||{}};
 }
@@ -897,7 +902,7 @@ function joanPintar(){
  const L=$('#joanLayer');if(!L)return;
  if(!JOAN.on){L.innerHTML='';return}
  if(!JOAN.abierto){L.innerHTML=`<button class="jfab" data-action="joanAbrir" aria-label="Abrir chat con Joan"><span class="jdot"></span>Joan${JOAN.esperando?' …':''}</button>`;return}
- const msgs=JOAN.msgs.map(m=>`<div class="jm ${m.de}">${joanFmt(m.t)}${m.ctx&&m.de==='yo'?`<span class="jc">${esc(m.ctx)}</span>`:''}</div>`).join('')||`<div class="jm joan">Hola, Claudio. Pregúntame por el pipeline o pídeme registrar algo. Si tienes una ficha abierta, puedes decir «este prospecto» o «este contacto».</div>`;
+ const msgs=JOAN.msgs.map(m=>`<div class="jm ${m.de}">${joanFmt(m.t)}${m.ctx&&m.de==='yo'?`<span class="jc">${esc(m.ctx)}</span>`:''}</div>`).join('')||`<div class="jm joan">Hola${me().name?', '+esc(primerNombre(me().name)):''}. Pregúntame por el pipeline o pídeme registrar algo. Si tienes una ficha abierta, puedes decir «este prospecto» o «este contacto».</div>`;
  const espera=JOAN.esperando?`<div class="jm joan" data-jespera>Joan está revisando…</div>`:'';
  const yaTenia=$('#jtexto')?$('#jtexto').value:'';
  L.innerHTML=`<section class="jchat" role="dialog" aria-label="Chat con Joan"><header><b>Joan</b><button data-action="joanNueva" title="Empezar una conversación nueva">Nueva</button><button data-action="joanCerrar" aria-label="Minimizar">✕</button></header>
@@ -937,16 +942,95 @@ function avisoConexion(){
  const el=document.getElementById('avisoConexion');if(!el)return;
  const web=/^https?:$/.test(location.protocol);let t='',d='';
  if(web&&STORE.mode==='navegador'){t='Sin conexión con el servidor: lo que hagas aquí NO queda en tu CRM.';d=STORE.motivo||'Estás viendo una copia de este navegador (o datos de ejemplo). No registres nada hasta que vuelva la conexión.'}
- else if(web&&STORE.mode==='clave'){t='Falta la clave del CRM: no se está guardando nada en el servidor.';d='Ingrésala en Configuración o recarga la página.'}
+ else if(web&&STORE.mode==='clave'){t='No has entrado con tu usuario: no se está guardando nada en el servidor.';d='Entra con tu usuario, tu clave y el código de tu aplicación, o recarga la página.'}
  else if(STORE.mode==='servidor'&&STORE.ready&&!canSync()){t='Estás viendo DATOS DE EJEMPLO, no tu CRM.';d='Lo que cambies aquí no se guarda. Recarga la página; si sigue igual, revisa la conexión.'}
- else if(STORE.mode==='servidor'&&STORE.status==='error'){t='No se pudieron guardar los últimos cambios en el servidor.';d='Puede haber vencido la sesión (código del correo). Recarga la página y revisa que tu último cambio aparezca.'}
+ else if(STORE.mode==='servidor'&&STORE.status==='error'){t='No se pudieron guardar los últimos cambios en el servidor.';d='Puede haber vencido tu sesión. Recarga la página, entra de nuevo y revisa que tu último cambio aparezca.'}
  el.innerHTML=t?`<div class="aviso-cx" role="alert"><span>⚠ ${esc(t)}<small>${esc(d)}</small></span><button data-action="recargar">Recargar</button></div>`:'';
 }
-function pedirClave(msg){
- openModal(`<h1 style="font-size:20px">Clave del CRM</h1><p class="sub sm">Ingresa la clave definida en config.php. Se pide una sola vez en cada dispositivo para sincronizar tus datos con el servidor.</p>
- <form data-form="clave" style="margin-top:12px"><div class="fgrid"><label class="f full">Clave<input id="claveCrm" type="password" name="clave" required autocomplete="current-password"></label></div>
- <p class="err" data-err>${esc(msg||'')}</p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Ahora no</button><button class="btn pri" type="submit">Conectar</button></div></form>`);
+/* ---------- Cuentas por persona ----------
+   Entrar: usuario y clave → (clave propia si la actual es temporal) → código de 6 dígitos de la aplicación de
+   autenticación (la primera vez se activa con la clave secreta que entrega el servidor). */
+const SES={yo:null,desafio:'',cuentas:null};
+const primerNombre=n=>String(n||'').split(' ')[0];
+function pedirEntrada(msg){
+ SES.desafio='';
+ openModal(`<h1 style="font-size:20px">Entrar al CRM</h1><p class="sub sm">Con tu usuario y tu clave. Después se pide el código de tu aplicación de autenticación.</p>
+ <form data-form="entrar" style="margin-top:12px"><div class="fgrid"><label class="f full">Usuario<input name="usuario" required autocomplete="username" autocapitalize="none" spellcheck="false"></label><label class="f full">Clave<input type="password" name="clave" required autocomplete="current-password"></label></div>
+ <p class="err" data-err>${esc(msg||'')}</p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Ahora no</button><button class="btn pri" type="submit">Continuar</button></div></form>`);
 }
+function formCodigo(){return `<form data-form="entrarCodigo" style="margin-top:12px"><div class="fgrid"><label class="f full">Código de 6 dígitos<input name="codigo" required inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7"></label></div>
+ <p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="askKey">Volver</button><button class="btn pri" type="submit">Entrar</button></div></form>`}
+function pasoEntrada(r){
+ SES.desafio=r.desafio||'';const hola=r.nombre?`Hola, ${esc(primerNombre(r.nombre))}. `:'';
+ if(r.paso==='nueva-clave')return openModal(`<h1 style="font-size:20px">Elige tu clave</h1><p class="sub sm">${hola}Entraste con una clave temporal. Elige una propia: al menos 10 caracteres, con letras y números.</p>
+ <form data-form="entrarClave" style="margin-top:12px"><div class="fgrid"><label class="f full">Clave nueva<input type="password" name="nueva" required minlength="10" autocomplete="new-password"></label><label class="f full">Repítela<input type="password" name="repetir" required minlength="10" autocomplete="new-password"></label></div>
+ <p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="askKey">Volver</button><button class="btn pri" type="submit">Guardar clave</button></div></form>`);
+ if(r.paso==='activar'){const g=String(r.secreto||'').replace(/(.{4})/g,'$1 ').trim();
+  return openModal(`<h1 style="font-size:20px">Activa el segundo factor</h1><p class="sub sm">${hola}Para entrar se pide además un código de tu celular. En tu aplicación de autenticación (Google Authenticator, Microsoft Authenticator u otra) agrega una cuenta con esta clave y escribe el código de 6 dígitos que te muestra.</p>
+ <p style="font:600 16px/1.5 ui-monospace,Menlo,monospace;letter-spacing:.04em;background:var(--surface-2,#F2F4F7);border-radius:8px;padding:10px 12px;margin:10px 0;word-break:break-all" data-secreto>${esc(g)}</p>
+ <p class="sm muted">Desde el celular también puedes <a href="${esc(r.uri||'')}">abrirla directo en la aplicación</a>. Guarda esta clave: sin ella, el administrador tendría que reiniciar tu segundo factor.</p>${formCodigo()}`)}
+ openModal(`<h1 style="font-size:20px">Código de verificación</h1><p class="sub sm">${hola}Escribe el código de 6 dígitos que muestra tu aplicación de autenticación.</p>${formCodigo()}`);
+}
+async function entrarApi(body){try{return await api('POST','?accion=entrar',body)}catch(e){return{status:0,j:{error:'No se pudo contactar al servidor.'}}}}
+// Fija la persona de la sesión. Si la copia de este navegador era de otra persona, se descarta (no se muestra ni se sube).
+const LOCALES=()=>[KEY,KEY+'-pend',KEY+'-rev',KEY+'-previo',KEY+'-reemplazo'];
+function aplicarSesion(yo,usuarios){
+ SES.yo=yo;let dueno=null;try{dueno=localStorage.getItem(KEY+'-usuario')}catch(e){}
+ if(dueno!==yo.id){
+  if(STORE.fromLocal){try{LOCALES().forEach(k=>localStorage.removeItem(k))}catch(e){}STORE.fromLocal=false;S=seed();migrate()}
+  try{localStorage.setItem(KEY+'-usuario',yo.id)}catch(e){}
+ }
+ if(Array.isArray(usuarios)&&usuarios.length)S.users=usuarios;
+ S.currentUser=yo.id;
+}
+async function salir(){
+ if(STORE.timer){clearTimeout(STORE.timer);flushRemote()}
+ await STORE.queue;
+ if(hasPend()&&STORE.status==='error')return toast('Hay cambios que no se alcanzaron a subir al servidor. Revisa la conexión antes de cerrar sesión.');
+ try{await api('POST','?accion=salir')}catch(e){}
+ try{LOCALES().forEach(k=>localStorage.removeItem(k));localStorage.removeItem(KEY+'-usuario');localStorage.removeItem(AJ_KEY);sessionStorage.clear()}catch(e){}
+ location.reload();
+}
+function miCuenta(){
+ const u=me()||{};
+ openModal(`<h1 style="font-size:20px">${esc(u.name||'')}</h1><p class="sub sm">${esc(u.roleLabel||'')}${u.equipo?' · equipo '+esc(u.equipo):''}</p>
+ <div class="form-foot" style="justify-content:flex-start;flex-wrap:wrap"><button class="btn" data-action="miClave">Cambiar mi clave</button><button class="btn danger" data-action="salir">Cerrar sesión</button><button class="btn" data-action="closeModal">Cerrar</button></div>`);
+}
+function formMiClave(){
+ openModal(`<h1 style="font-size:20px">Cambiar mi clave</h1><form data-form="miClave" style="margin-top:12px"><div class="fgrid"><label class="f full">Clave actual<input type="password" name="actual" required autocomplete="current-password"></label><label class="f full">Clave nueva<input type="password" name="nueva" required minlength="10" autocomplete="new-password"></label><label class="f full">Repítela<input type="password" name="repetir" required minlength="10" autocomplete="new-password"></label></div>
+ <p class="sm muted">Al menos 10 caracteres, con letras y números. Se cierran tus sesiones en otros dispositivos.</p><p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Cambiar</button></div></form>`);
+}
+/* Administración de cuentas (solo administrador) */
+const ROLES_CTA=[['ejecutivo','Ejecutivo comercial'],['subgerente','Subgerente comercial'],['gerente','Gerente comercial'],['admin','Administrador']];
+async function cargarCuentas(){SES.cuentas='cargando';let r;try{r=await api('GET','?accion=usuarios')}catch(e){r={status:0,j:null}}SES.cuentas=r.status===200&&r.j?r.j.usuarios:{error:(r.j&&r.j.error)||'No se pudo leer la lista de cuentas.'};if(currentView()==='config')render()}
+function seccionCuentas(){
+ if(STORE.mode!=='servidor'||!esAdmin())return '';
+ if(SES.cuentas===null){setTimeout(cargarCuentas,0);return '<div class="section"><h2>Usuarios y equipos</h2><p class="muted sm">Cargando…</p></div>'}
+ if(SES.cuentas==='cargando')return '<div class="section"><h2>Usuarios y equipos</h2><p class="muted sm">Cargando…</p></div>';
+ if(!Array.isArray(SES.cuentas))return `<div class="section"><h2>Usuarios y equipos</h2><p class="err">${esc(SES.cuentas.error)}</p></div>`;
+ const L=SES.cuentas;const estado=u=>!u.activo?'<span class="b">Desactivada</span>':u.bloqueada?'<span class="b b-bad">Bloqueada</span>':u.claveTemporal?'<span class="b b-warn">Clave temporal</span>':!u.segundoFactor?'<span class="b b-warn">Sin segundo factor</span>':'<span class="b b-ok">Activa</span>';
+ return `<div class="section"><h2>Usuarios y equipos</h2><p class="muted sm" style="margin:0 0 8px">Cada persona entra con su usuario, su clave y un código de su aplicación de autenticación. Ve lo suyo; el subgerente, además, lo de su equipo; el gerente y el administrador, todo.</p>
+ <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Equipo</th><th>Estado</th><th>Último ingreso</th><th></th></tr></thead><tbody>
+ ${L.map(u=>`<tr><td><strong>${esc(u.name)}</strong></td><td>${esc(u.usuario)}</td><td>${esc(u.roleLabel)}</td><td>${esc(u.equipo||'—')}</td><td>${estado(u)}</td><td>${u.ultimoIngreso?esc(new Date(u.ultimoIngreso).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})):'—'}</td>
+ <td style="white-space:nowrap"><button class="btn sm" data-action="ctaEditar" data-id="${esc(u.id)}">Editar</button> <button class="btn sm" data-action="ctaClave" data-id="${esc(u.id)}">Clave temporal</button> <button class="btn sm" data-action="ctaFactor" data-id="${esc(u.id)}">Reiniciar 2.º factor</button></td></tr>`).join('')}
+ </tbody></table></div><div class="d-actions" style="margin-top:8px"><button class="btn pri" data-action="ctaNueva">Nueva cuenta</button><button class="btn" data-action="ctaTraspaso">Traspasar cartera</button></div></div>`;
+}
+function formCuenta(u){
+ const eq=[...new Set((Array.isArray(SES.cuentas)?SES.cuentas:[]).map(x=>x.equipo).filter(Boolean))];
+ openModal(`<h1 style="font-size:20px">${u?'Editar cuenta':'Nueva cuenta'}</h1><form data-form="${u?'ctaEditar':'ctaCrear'}" data-id="${u?esc(u.id):''}" style="margin-top:12px"><div class="fgrid">
+ <label class="f full">Nombre<input name="nombre" required value="${u?esc(u.name):''}"></label>
+ ${u?'':'<label class="f full">Usuario (con él entra; por ejemplo, su correo)<input name="usuario" required autocapitalize="none" spellcheck="false"></label>'}
+ <label class="f">Rol<select name="rol">${opt(ROLES_CTA,u?u.role:'ejecutivo')}</select></label>
+ <label class="f">Equipo (subgerencia)<input name="equipo" list="equiposCta" value="${u?esc(u.equipo||''):''}"><span class="hint">Solo subgerentes y ejecutivos.</span></label><datalist id="equiposCta">${eq.map(e=>`<option value="${esc(e)}">`).join('')}</datalist>
+ <label class="f full" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" class="chk" name="admin" ${u&&u.admin?'checked':''}> También administra el sistema (cuentas y configuración)</label>
+ ${u?`<label class="f full" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" class="chk" name="activo" ${u.activo?'checked':''}> Cuenta activa</label>`:''}
+ </div><p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">${u?'Guardar':'Crear cuenta'}</button></div></form>`);
+}
+function mostrarTemporal(nombre,clave){
+ openModal(`<h1 style="font-size:20px">Clave temporal de ${esc(nombre)}</h1><p class="sub sm">Entrégasela por un medio seguro. Se muestra solo esta vez: al entrar, la persona elige su clave y activa el segundo factor.</p>
+ <p style="font:600 18px/1.5 ui-monospace,Menlo,monospace;background:var(--surface-2,#F2F4F7);border-radius:8px;padding:10px 12px;margin:10px 0" data-temporal>${esc(clave)}</p><div class="form-foot"><button class="btn pri" data-action="closeModal">Listo</button></div>`);
+}
+async function opCuenta(body){let r;try{r=await api('POST','?accion=usuarios',body)}catch(e){r={status:0,j:{error:'No se pudo contactar al servidor.'}}}return r}
 document.addEventListener('visibilitychange',refreshFromRemote);
 // Además revisa cada minuto si hubo cambios en otro dispositivo o de Joan (solo con la pestaña visible y sin cambios por guardar)
 setInterval(refreshFromRemote,60000);
@@ -965,15 +1049,22 @@ async function downloadCSV(name,rows){
  const r=await fileSave(name,toCSV(rows));
  if(r==='ok')toast('Archivo descargado. Ábrelo directamente en Excel.');else if(r==='declined')toast('Descarga cancelada.');else if(r==='busy')toast('Ya hay una descarga esperando tu confirmación.');else toast('La descarga no está disponible en esta vista. Usa «Copiar para Excel».');
 }
-function cleanSeed(){const base=seed();const u={id:'u1',name:byId(S.users,'u1')?.name||'Claudio Méndez',role:'admin',roleLabel:'Business Developer (administrador)'};S.users=[u];const p=makePlan('Retail',nextMonth(),'u1');return{v:5,mode:'real',lastBackup:'',plans:[p],users:[u],currentUser:'u1',companies:[],contacts:[],leads:[],opps:[],activities:[],tasks:[],offers:[],invoices:[],recepciones:[],config:configDefault(),audit:[],seq:{opp:0,offer:0,lead:0}}}
+function cleanSeed(){const base=seed();const yo=SES.yo&&STORE.mode==='servidor'?SES.yo:null;const users=yo?S.users:[{id:'u1',name:byId(S.users,'u1')?.name||'Administrador',role:'admin',roleLabel:'Administrador'}];const uid0=yo?yo.id:'u1';S.users=users;const p=makePlan('Retail',nextMonth(),uid0);return{v:5,mode:'real',lastBackup:'',plans:[p],users,currentUser:uid0,companies:[],contacts:[],leads:[],opps:[],activities:[],tasks:[],offers:[],invoices:[],recepciones:[],config:configDefault(),audit:[],seq:{opp:0,offer:0,lead:0}}}
 const UI={repFactYear:null,repFactState:'',repConvYear:'',repTab:'opps',prGran:'semana',prPer:'',repGran:'mes',repPer:'',leadPlan:'',leadStage:'',leadGrade:'',leadView:'kanban',leadCompany:'',actCompany:'',taskCompany:'',taskKind:'',oppView:'kanban',oppYear:'',oppOwner:'',oppStatus:'abierta',oppIndustry:'',actType:'',actUser:'',compInd:'',compRel:'',taskScope:'mine',planVert:'',planSel:{}};
 let CUR=null;
 
-const me=()=>byId(S.users,S.currentUser);
-const seesAll=()=>['gerente','admin'].includes(me().role);
+const me=()=>byId(S.users,S.currentUser)||{id:S.currentUser,name:'',role:'ejecutivo',roleLabel:''};
+// Roles: gerente y administrador ven todo; el subgerente, lo suyo y lo de su equipo; el ejecutivo, lo suyo.
+// El servidor aplica estas reglas (lo que no corresponde no llega); aquí solo deciden qué se muestra y qué se ofrece.
+const esAdmin=()=>{const u=me();return u.role==='admin'||!!u.admin};
+const esTodo=()=>{const u=me();return u.role==='gerente'||esAdmin()};
+const equipoDe=()=>{const u=me();if(esTodo())return null;if(u.role==='subgerente'&&u.equipo)return new Set(S.users.filter(x=>x.equipo===u.equipo).map(x=>x.id).concat(u.id));return new Set([u.id])};
+const seesAll=()=>esTodo()||me().role==='subgerente';
 const ownerOf=x=>x.ownerId||x.assigneeId;
-const mine=a=>seesAll()?a:a.filter(x=>ownerOf(x)===S.currentUser);
-const canEdit=x=>seesAll()||ownerOf(x)===S.currentUser;
+const mine=a=>{const e=equipoDe();return e?a.filter(x=>e.has(ownerOf(x))):a};
+const canEdit=x=>{const e=equipoDe();return !e||e.has(ownerOf(x))};
+// Personas a las que se puede asignar algo: el ejecutivo, a sí mismo; el subgerente, a su equipo; gerente y administrador, a cualquiera activo
+const asignables=()=>{const e=equipoDe();return S.users.filter(u=>u.activo!==false&&(!e||e.has(u.id)))};
 const uname=id=>byId(S.users,id)?.name||'—';
 const cname=id=>{const c=byId(S.companies,id);return c?(c.tradeName||c.legalName):'—'};
 const ctname=id=>{const k=byId(S.contacts,id);return k?k.firstName+' '+k.lastName:'—'};
@@ -1222,10 +1313,12 @@ function renderNav(v){
  const offAl=al.filter(a=>a.entity==='offer').length;
  const cnt={hoy:al.length?`<span class="cnt bad">${al.length}</span>`:'',tareas:overdue?`<span class="cnt bad">${overdue}</span>`:'',oportunidades:risk?`<span class="cnt bad">${risk}</span>`:'',ofertas:offAl?`<span class="cnt bad">${offAl}</span>`:''};
  $('#side').innerHTML=NAV.map(n=>n[0]==='sep'?'<div class="sep"></div>':`<a href="#${n[0]}" data-nav="${n[0]}" class="${v===n[0]?'active':''}"><span>${n[1]}</span>${cnt[n[0]]||''}</a>`).join('')+
-  `<div class="mobile-user"><label class="f">Usuario activo<select data-action-change="user">${S.users.map(u=>`<option value="${u.id}" ${u.id===S.currentUser?'selected':''}>${esc(u.name)} (${esc(u.roleLabel)})</option>`).join('')}</select></label></div>
-   <div class="foot sync" id="syncState" data-state="${esc(syncState())}">${esc(syncText())}</div>`;
+  (STORE.mode==='servidor'&&SES.yo?`<div class="mobile-user"><button class="btn" style="width:100%" data-action="miCuenta">${esc(me().name)} · ${esc(me().roleLabel||'')}</button></div>`:`<div class="mobile-user"><label class="f">Usuario activo<select data-action-change="user">${S.users.map(u=>`<option value="${u.id}" ${u.id===S.currentUser?'selected':''}>${esc(u.name)} (${esc(u.roleLabel)})</option>`).join('')}</select></label></div>`)+
+  `<div class="foot sync" id="syncState" data-state="${esc(syncState())}">${esc(syncText())}</div>`;
  document.querySelectorAll('[data-navm]').forEach(a=>a.classList.toggle('active',a.dataset.navm===v));
- $('#userSel').innerHTML=S.users.map(u=>`<option value="${u.id}" ${u.id===S.currentUser?'selected':''}>${esc(u.name)} (${esc(u.roleLabel)})</option>`).join('');
+ const enSesion=STORE.mode==='servidor'&&!!SES.yo;const sel=$('#userSel'),chip=$('#userChip');
+ sel.hidden=enSesion;if(chip){chip.hidden=!enSesion;if(enSesion){chip.textContent=me().name;chip.title=(me().roleLabel||'')+' · Mi cuenta'}}
+ if(!enSesion)sel.innerHTML=S.users.map(u=>`<option value="${u.id}" ${u.id===S.currentUser?'selected':''}>${esc(u.name)} (${esc(u.roleLabel)})</option>`).join('');
 }
 const VIEWS={hoy:viewHoy,planes:viewPlans,prospectos:viewLeads,empresas:viewCompanies,contactos:viewContacts,oportunidades:viewOpps,ofertas:viewOffers,actividades:viewActivities,tareas:viewTasks,reportes:viewReports,config:viewConfig};
 function currentView(){const v=(location.hash.slice(1)||'hoy').split('/')[0];return VIEWS[v]?v:'hoy'}
@@ -1240,7 +1333,7 @@ function openEntity(type,id){if(type==='task'){const t=byId(S.tasks,id);if(t&&t.
 
 /* ============ HELPERS DE VISTA ============ */
 const opt=(list,sel,empty)=>(empty!==undefined?`<option value="">${esc(empty)}</option>`:'')+list.map(x=>{const[v,l]=Array.isArray(x)?x:[x,x];return `<option value="${esc(v)}" ${String(v)===String(sel??'')?'selected':''}>${esc(l)}</option>`}).join('');
-const userOpts=sel=>opt(S.users.map(u=>[u.id,u.name]),sel);
+const userOpts=sel=>{const l=asignables();if(sel&&!l.some(u=>u.id===sel)){const u=byId(S.users,sel);if(u)l.push(u)}return opt(l.map(u=>[u.id,u.name]),sel)};
 const sevBadge=(sev,txt)=>`<span class="b b-${sev==='bad'?'bad':sev==='warn'?'warn':sev==='info'?'info':'ok'}">${esc(txt)}</span>`;
 function stageBadge(o){if(o.status==='ganada')return '<span class="b b-ok">Booking</span>';if(o.status==='perdida')return '<span class="b b-bad">Perdida</span>';if(o.status==='postergada')return '<span class="b">Postergada</span>';return `<span class="b b-brand">${esc(stageOf(o.stage)?.name)}</span>`}
 function alertItem(a){return `<button class="row-item sev-${a.sev}" data-action="open" data-type="${a.entity}" data-id="${a.id}"><span class="dot"></span><span class="ri-main"><strong>${esc(a.kind)}</strong><span>${esc(a.title)}${a.company?' en '+esc(a.company):''}</span><span class="muted sm">${esc(a.detail)}${a.amount?', '+mm(a.amount):''}. ${esc(a.action)}.</span></span>${seesAll()?`<span class="ri-right muted">${esc(uname(a.ownerId))}</span>`:''}</button>`}
@@ -1274,7 +1367,7 @@ function viewHoy(){
  const taskHtml=tasks.map(t=>`<div class="row-item sev-${t.due<todayIso?'bad':t.priority==='Alta'?'warn':'info'}"><input type="checkbox" class="chk" data-action="doneTask" data-id="${t.id}" aria-label="Completar tarea"><span class="ri-main" data-action="open" data-type="task" data-id="${t.id}" style="cursor:pointer"><span>${esc(t.title)}</span><span class="muted sm">${esc(entityLabel(t.entityType,t.entityId))}</span></span><span class="ri-right">${t.due<todayIso?`<span class="b b-bad">Vencida ${rel(t.due)}</span>`:`<span class="b">${esc(t.priority)}</span>`}</span></div>`).join('')+
   oppActs.map(o=>`<button class="row-item sev-${o.nextActionDate<todayIso?'bad':'info'}" data-action="open" data-type="opp" data-id="${o.id}"><span class="dot"></span><span class="ri-main"><span>${esc(o.nextAction)}</span><span class="muted sm">${esc(o.name)}</span></span><span class="ri-right">${o.nextActionDate<todayIso?`<span class="b b-bad">${rel(o.nextActionDate)}</span>`:'<span class="b">Hoy</span>'}</span></button>`).join('');
  return `
- ${STORE.mode==='clave'?'<div class="warnbox warn">Tus datos no se están sincronizando porque falta la clave del servidor. <a href="#" data-action="askKey">Ingresar clave</a>.</div>':''}
+ ${STORE.mode==='clave'?'<div class="warnbox warn">Tus datos no se están sincronizando porque no has entrado con tu usuario. <a href="#" data-action="askKey">Entrar</a>.</div>':''}
  ${S.mode==='real'&&STORE.mode==='navegador'&&(!S.lastBackup||daysFrom(S.lastBackup)>7)?'<div class="warnbox warn">Tus datos quedan solo en este navegador. <a href="#config">Descarga un respaldo</a> para no perderlos.</div>':''}
  ${S.mode==='real'&&remoteMode()&&(!S.lastBackup||daysFrom(S.lastBackup)>30)?`<div class="warnbox info">Tus datos están guardados en ${lugar()}. Igual conviene <a href="#config">descargar un respaldo</a> una vez al mes.</div>`:''}
  <div class="page-h"><div><h1>${seesAll()&&S.users.length>1?'Vista del equipo':greet+', '+esc(u.name.split(' ')[0])}</h1><p class="sub">${fmtLong(TODAY)}. ${tasks.length+oppActs.length} acciones para hoy y ${al.length} alertas activas.</p></div>
@@ -1908,8 +2001,10 @@ function viewReportsOpps(){
 
 /* ============ VISTA: CONFIGURACIÓN ============ */
 function viewConfig(){
- const R=S.config;const admin=seesAll();
- return `<div class="page-h"><div><h1>Configuración</h1><p class="sub">Reglas del motor de alertas, indicadores económicos y metas. ${admin?'':'Solo el gerente comercial puede modificarlas.'}</p><p class="muted sm" style="margin:4px 0 0">CRM Comercial, revisión ${CRM_REV.n} del ${fmtDate(CRM_REV.fecha)}: ${esc(CRM_REV.nota)}.</p></div></div>
+ const R=S.config;const admin=esAdmin();const sesion=STORE.mode==='servidor'&&SES.yo;
+ return `<div class="page-h"><div><h1>Configuración</h1><p class="sub">Reglas del motor de alertas, indicadores económicos y metas. ${admin?'':'Solo el administrador puede modificarlas.'}</p><p class="muted sm" style="margin:4px 0 0">CRM Comercial, revisión ${CRM_REV.n} del ${fmtDate(CRM_REV.fecha)}: ${esc(CRM_REV.nota)}.</p></div></div>
+ ${sesion?`<div class="section" style="margin-top:0"><h2>Mi cuenta</h2><p class="sm">${esc(me().name)} · ${esc(me().roleLabel||'')}${me().equipo?' · equipo '+esc(me().equipo):''}</p><div class="d-actions"><button class="btn" data-action="miClave">Cambiar mi clave</button><button class="btn danger" data-action="salir">Cerrar sesión</button></div></div>`:''}
+ ${seccionCuentas()}
  <form data-form="config"><fieldset ${admin?'':'disabled'}>
  <div class="section" style="margin-top:0"><h2>Seguimiento de ofertas entregadas (Upside): días desde la entrega o el último seguimiento</h2><div class="fgrid"><label class="f">Recordatorio<input type="number" min="1" name="f_remind" value="${R.followup.remind}"></label><label class="f">Alerta amarilla<input type="number" min="1" name="f_yellow" value="${R.followup.yellow}"></label><label class="f">Alerta roja<input type="number" min="1" name="f_red" value="${R.followup.red}"></label><label class="f">Aviso de vencimiento de oferta<input type="number" min="1" name="offerExpiry" value="${R.offerExpiry}"></label></div></div>
  <div class="section"><h2>Oportunidades y prospectos</h2><div class="fgrid"><label class="f">Oportunidad sin actividad: alerta<input type="number" min="1" name="o_warn" value="${R.oppNoAct.warn}"></label><label class="f">Oportunidad sin actividad: riesgo<input type="number" min="1" name="o_risk" value="${R.oppNoAct.risk}"></label><label class="f">Oportunidad estancada en etapa<input type="number" min="1" name="stalledDays" value="${R.stalledDays}"></label><label class="f">Prospecto sin seguimiento<input type="number" min="1" name="leadNoAct" value="${R.leadNoAct}"></label></div></div>
@@ -1939,10 +2034,10 @@ function viewConfig(){
   </div><p class="muted sm" style="margin:8px 0">Cada guardado es una transacción completa. Nada se borra físicamente: lo que se quita queda recuperable. Hay un respaldo de la base por hora (últimos 3 días) y uno por día (último mes), además de la copia JSON de siempre, que se mantiene al día.</p>
   <div class="d-actions"><button class="btn" data-action="eliminados">Ver registros eliminados</button></div></div>`})():''}
  <div class="section"><h2>Auditoría (últimos cambios)</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Usuario</th><th>Registro</th><th>Campo</th><th>Valor anterior</th><th>Valor nuevo</th></tr></thead><tbody>${S.audit.slice(0,60).map(a=>`<tr><td>${esc(a.at)}</td><td>${esc(uname(a.userId))}</td><td>${esc(a.entity)}</td><td>${esc(a.field)}</td><td>${esc(a.oldV)}</td><td>${esc(a.newV)}</td></tr>`).join('')}</tbody></table></div></div>
- <div class="section"><h2>Dónde se guardan tus datos</h2><p class="sm" style="max-width:78ch">${STORE.mode==='servidor'?(canSync()?'Tus datos se guardan en el servidor de tu sitio, protegidos con tu clave, y se sincronizan entre el celular y el computador: al volver a la pestaña se cargan los cambios hechos en otro dispositivo. El servidor guarda además una copia por hora en la carpeta datos/historial.':'Estás con datos de ejemplo, que no se suben al servidor. Restaura tu respaldo o empieza con tus datos y todo lo que registres quedará en el servidor.'):STORE.mode==='artefacto'?(canSync()?'Tus datos se guardan en la base de datos de este artefacto, en un espacio privado que solo tú puedes ver, y se sincronizan entre tus dispositivos.':'Estás con datos de ejemplo, que no se suben al artefacto.'):STORE.mode==='clave'?'El servidor está disponible, pero falta ingresar la clave en este dispositivo. Mientras tanto, los cambios quedan solo en este navegador.':STORE.mode==='conectando'?'Conectando con el guardado…':'Los datos quedan solo en este navegador. Descarga un respaldo al menos una vez por semana.'}</p>
- ${STORE.mode==='clave'?'<div class="d-actions" style="margin-bottom:8px"><button class="btn pri" data-action="askKey">Ingresar clave</button></div>':''}${STORE.mode==='servidor'?'<div class="d-actions" style="margin-bottom:8px"><button class="btn" data-action="forgetKey">Olvidar la clave en este dispositivo</button></div>':''}<p class="sm muted">Modo actual: ${S.mode==='real'?'datos reales':'datos de ejemplo'}. Último respaldo: ${S.lastBackup?fmtDate(S.lastBackup)+' ('+rel(S.lastBackup)+')':'nunca'}.</p>
- <div class="d-actions"><button class="btn pri" data-action="backup">Descargar respaldo</button><label class="btn" style="cursor:pointer">Restaurar respaldo<input type="file" accept=".json,application/json" data-restore hidden></label><label class="btn" style="cursor:pointer">Importar funnel<input type="file" accept=".xlsx,.csv" data-funnel hidden></label>${S.mode!=='real'?'<button class="btn danger" data-action="cleanStart">Empezar con mis datos</button>':''}</div></div>
- ${S.mode!=='real'?'<div class="section"><h2>Datos de demostración</h2><p class="sm muted">Restaura los datos de ejemplo. Se pierden los cambios hechos sobre ellos.</p><button class="btn danger" data-action="resetDemo">Restaurar datos de ejemplo</button></div>':''}`;
+ <div class="section"><h2>Dónde se guardan tus datos</h2><p class="sm" style="max-width:78ch">${STORE.mode==='servidor'?(canSync()?'Los datos se guardan en el servidor y cada persona entra con su cuenta: ves lo que te corresponde según tu rol y tu equipo, y el servidor revisa cada cambio. Al volver a la pestaña se cargan los cambios hechos por otras personas o en otro dispositivo. El servidor guarda además respaldos por hora y por día.':'Estás con datos de ejemplo, que no se suben al servidor. Restaura tu respaldo o empieza con tus datos y todo lo que registres quedará en el servidor.'):STORE.mode==='artefacto'?(canSync()?'Tus datos se guardan en la base de datos de este artefacto, en un espacio privado que solo tú puedes ver, y se sincronizan entre tus dispositivos.':'Estás con datos de ejemplo, que no se suben al artefacto.'):STORE.mode==='clave'?'El servidor está disponible, pero no has entrado con tu usuario en este dispositivo. Mientras tanto, los cambios quedan solo en este navegador.':STORE.mode==='conectando'?'Conectando con el guardado…':'Los datos quedan solo en este navegador. Descarga un respaldo al menos una vez por semana.'}</p>
+ ${STORE.mode==='clave'?'<div class="d-actions" style="margin-bottom:8px"><button class="btn pri" data-action="askKey">Entrar</button></div>':''}<p class="sm muted">Modo actual: ${S.mode==='real'?'datos reales':'datos de ejemplo'}. Último respaldo: ${S.lastBackup?fmtDate(S.lastBackup)+' ('+rel(S.lastBackup)+')':'nunca'}.</p>
+ <div class="d-actions"><button class="btn pri" data-action="backup">Descargar respaldo</button>${!sesion||admin?'<label class="btn" style="cursor:pointer">Restaurar respaldo<input type="file" accept=".json,application/json" data-restore hidden></label>':''}${!sesion||esTodo()?'<label class="btn" style="cursor:pointer">Importar funnel<input type="file" accept=".xlsx,.csv" data-funnel hidden></label>':''}${S.mode!=='real'&&(!sesion||admin)?'<button class="btn danger" data-action="cleanStart">Empezar con mis datos</button>':''}</div></div>
+ ${S.mode!=='real'&&!sesion?'<div class="section"><h2>Datos de demostración</h2><p class="sm muted">Restaura los datos de ejemplo. Se pierden los cambios hechos sobre ellos.</p><button class="btn danger" data-action="resetDemo">Restaurar datos de ejemplo</button></div>':''}`;
 }
 
 /* ============ BRIEFING ============ */
@@ -2186,8 +2281,15 @@ const ACTIONS={
  newVersion:d=>{const f=byId(S.offers,d.id);const cur=f.versions[f.versions.length-1];openModal(`<h1 style="font-size:20px">Nueva versión de ${esc(f.code)}</h1><p class="sub sm">La V${cur.n} queda bloqueada en el historial.</p><form data-form="version" data-id="${f.id}" style="margin-top:12px"><div class="fgrid"><label class="f">Monto neto V${cur.n+1} (CLP)<input type="number" min="0" step="any" name="net" value="${cur.net}" required></label><label class="f full">Qué cambió<textarea name="note" required placeholder="Por ejemplo: ajuste de dotación a pedido del cliente"></textarea></label></div><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Crear versión</button></div></form>`)},
  export:d=>doExport(d.what),
  dlExport:()=>{if(LAST_EXPORT)downloadCSV(LAST_EXPORT.name,LAST_EXPORT.rows)},
- askKey:()=>pedirClave(''),
- forgetKey:()=>{setClave('');STORE.mode='clave';STORE.ready=false;render();toast('Clave olvidada en este dispositivo. Tus datos siguen en el servidor.')},
+ askKey:()=>pedirEntrada(''),
+ miCuenta:()=>miCuenta(),
+ miClave:()=>formMiClave(),
+ salir:()=>salir(),
+ ctaNueva:()=>formCuenta(null),
+ ctaEditar:d=>{const u=(SES.cuentas||[]).find(x=>x.id===d.id);if(u)formCuenta(u)},
+ ctaClave:async d=>{const u=(SES.cuentas||[]).find(x=>x.id===d.id);if(!u)return;const r=await opCuenta({op:'clave',id:u.id});if(r.status!==200)return toast(esc(r.j&&r.j.error||'No se pudo.'));mostrarTemporal(u.name,r.j.claveTemporal);cargarCuentas()},
+ ctaFactor:async d=>{const u=(SES.cuentas||[]).find(x=>x.id===d.id);if(!u)return;const r=await opCuenta({op:'segundo-factor',id:u.id});if(r.status!==200)return toast(esc(r.j&&r.j.error||'No se pudo.'));toast(`Segundo factor reiniciado: ${esc(u.name)} lo activa de nuevo al entrar.`);cargarCuentas()},
+ ctaTraspaso:()=>{const L=(Array.isArray(SES.cuentas)?SES.cuentas:[]);openModal(`<h1 style="font-size:20px">Traspasar cartera</h1><p class="sub sm">Prospectos, planes, oportunidades, ofertas, tareas abiertas y empresas a cargo pasan a otra persona. Las actividades y tareas cerradas siguen a nombre de quien las hizo.</p><form data-form="ctaTraspasar" style="margin-top:12px"><div class="fgrid"><label class="f">Entrega<select name="de" required>${opt(L.map(u=>[u.id,u.name+(u.activo?'':' (desactivada)')]),'','Elige')}</select></label><label class="f">Recibe<select name="a" required>${opt(L.filter(u=>u.activo).map(u=>[u.id,u.name]),'','Elige')}</select></label></div><p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Traspasar</button></div></form>`)},
  repGran:d=>{UI.repGran=d.v;UI.repPer='';render()},
  repTab:d=>{UI.repTab=d.v;render()},
  prGran:d=>{UI.prGran=d.v;UI.prPer='';render()},
@@ -2403,7 +2505,13 @@ const setErr=(f,m)=>{const e=f.querySelector('[data-err]');if(e)e.textContent=m;
 const num=v=>Number(v)||0;
 const SUBMITS={
  joan:()=>joanEnviar(),
- clave:(d,f)=>{const v=String(d.clave||'').trim();if(!v)return setErr(f,'Ingresa la clave.');setClave(v);closeModal();STORE.mode='conectando';render();connectServer()},
+ entrar:async(d,f)=>{const r=await entrarApi({usuario:String(d.usuario||'').trim(),clave:String(d.clave||'')});if(r.status===200&&r.j&&r.j.paso)return pasoEntrada(r.j);setErr(f,(r.j&&r.j.error)||'No se pudo entrar.')},
+ entrarClave:async(d,f)=>{if(d.nueva!==d.repetir)return setErr(f,'Las dos claves no coinciden.');const r=await entrarApi({desafio:SES.desafio,nueva_clave:String(d.nueva||'')});if(r.status===200&&r.j&&r.j.paso)return pasoEntrada(r.j);if(r.status===401)return pedirEntrada(r.j&&r.j.error);setErr(f,(r.j&&r.j.error)||'No se pudo guardar la clave.')},
+ entrarCodigo:async(d,f)=>{const r=await entrarApi({desafio:SES.desafio,codigo:String(d.codigo||'').replace(/\s/g,'')});if(r.status===200&&r.j&&r.j.ok){closeModal();STORE.mode='conectando';render();connectServer();return}if(r.status===401&&/venció/.test((r.j&&r.j.error)||''))return pedirEntrada(r.j.error);setErr(f,(r.j&&r.j.error)||'El código no es correcto.')},
+ miClave:async(d,f)=>{if(d.nueva!==d.repetir)return setErr(f,'Las dos claves nuevas no coinciden.');let r;try{r=await api('POST','?accion=cambiar-clave',{actual:String(d.actual||''),nueva:String(d.nueva||'')})}catch(e){return setErr(f,'No se pudo contactar al servidor.')}if(r.status!==200)return setErr(f,(r.j&&r.j.error)||'No se pudo cambiar la clave.');closeModal();toast('Clave cambiada.')},
+ ctaCrear:async(d,f)=>{const r=await opCuenta({op:'crear',usuario:String(d.usuario||'').trim(),nombre:String(d.nombre||'').trim(),rol:d.rol,equipo:String(d.equipo||'').trim(),admin:!!d.admin});if(r.status!==200)return setErr(f,(r.j&&r.j.error)||'No se pudo crear.');mostrarTemporal(String(d.nombre||''),r.j.claveTemporal);cargarCuentas();refreshFromServer(true)},
+ ctaEditar:async(d,f)=>{const r=await opCuenta({op:'editar',id:f.dataset.id,nombre:String(d.nombre||'').trim(),rol:d.rol,equipo:String(d.equipo||'').trim(),admin:!!d.admin,activo:!!d.activo});if(r.status!==200)return setErr(f,(r.j&&r.j.error)||'No se pudo guardar.');closeModal();toast('Cuenta actualizada.');cargarCuentas();refreshFromServer(true)},
+ ctaTraspasar:async(d,f)=>{if(!d.de||!d.a||d.de===d.a)return setErr(f,'Elige dos personas distintas.');const r=await opCuenta({op:'traspasar',de:d.de,a:d.a});if(r.status!==200)return setErr(f,(r.j&&r.j.error)||'No se pudo traspasar.');const n=r.j.traspasados||{};const tot=Object.values(n).reduce((a,b)=>a+b,0);closeModal();toast(tot?`Listo: ${tot} registros traspasados.`:'No había nada que traspasar.');refreshFromServer(true)},
  quick:(d,f)=>{
   if(!d.ent)return setErr(f,'Selecciona a qué registro corresponde la actividad.');
   const[type,id]=d.ent.split(':');let companyId='';
@@ -2882,6 +2990,7 @@ document.addEventListener('change',e=>{const t=e.target;
  if(t.hasAttribute('data-funnel')&&t.files&&t.files[0]){const f=t.files[0];t.value='';fxImportFile(f);return}
  if(t.hasAttribute('data-meta')&&t.files&&t.files[0]){const f=t.files[0];t.value='';metaImportFile(f);return}
  if(t.hasAttribute('data-restore')&&t.files&&t.files[0]){const rd=new FileReader();rd.onload=()=>{try{const data=JSON.parse(rd.result);if(!Array.isArray(data.companies)||!Array.isArray(data.opps))throw new Error('formato');S=data;migrate();marcarReemplazo();save();closeDrawer();render();toast('Respaldo restaurado.')}catch(e){toast('El archivo no es un respaldo válido del CRM.')}};rd.readAsText(t.files[0]);return}
+ if((t.id==='userSel'||t.dataset.actionChange==='user')&&STORE.mode==='servidor'&&SES.yo)return;   // con sesión, la persona la fija el servidor
  if(t.id==='userSel'||t.dataset.actionChange==='user'){S.currentUser=t.value;save();closeDrawer();closeNav();render();toast(`Viendo como ${esc(me().name)} (${esc(me().roleLabel)}).`);return}
  if(t.hasAttribute('data-score')){const f=t.form;const l=byId(S.leads,f.dataset.id);const tmp={...l,vars:{}};SCORE_VARS.forEach(v=>{if(!v.auto){const s=f.querySelector(`[name=v_${v.k}]`);if(s&&s.value!=='')tmp.vars[v.k]=s.value}});$('#scoreBox').innerHTML=scoreBox(tmp);return}
  if(t.name==='stage'&&t.form&&t.form.dataset.form==='opp'){const st=stageOf(t.value);const p=t.form.querySelector('[name=prob]');p.value=st.p;t.form.querySelector('[name=probReason]').value='';$('#probHint').textContent=`Por defecto para la etapa: ${st.p}%`;return}

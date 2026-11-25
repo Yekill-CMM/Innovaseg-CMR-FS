@@ -9,22 +9,21 @@ $CAB = "<?php exit; ?>\n";
 
 $T = sys_get_temp_dir() . '/crm-bajas-' . getmypid();
 @mkdir("$T/app/datos", 0777, true); @mkdir("$T/local", 0777, true);
-foreach (['index.html', 'api.php', 'almacen.php'] as $f) copy("$APP/$f", "$T/app/$f");
+foreach (['index.html', 'api.php', 'almacen.php', 'cuentas.php', 'permisos.php'] as $f) copy("$APP/$f", "$T/app/$f");
+require "$APP/cuentas.php"; require __DIR__ . '/sesion-prueba.php';
 copy(dirname($APP) . '/local/router.php', "$T/local/router.php");
-$CLAVE = 'clave-de-prueba-123'; $CLAVE_AG = str_repeat('a', 24);
-file_put_contents("$T/app/config.php", "<?php define('CRM_CLAVE', '$CLAVE'); define('CRM_CLAVE_AGENTE', '$CLAVE_AG');");
+$CLAVE_AG = str_repeat('a', 24);
+file_put_contents("$T/app/config.php", "<?php define('CRM_CLAVE_AGENTE', '$CLAVE_AG'); define('CRM_AGENTE_USUARIO', 'admin.prueba');");
+pruebaCuentas("$T/app/datos", [['u1', 'admin.prueba', 'Admin Prueba', 'admin', '', true]]);
 file_put_contents("$T/app/datos/crm.json.php", $CAB . json_encode((object) ['rev' => 10, 'savedAt' => 0, 'data' => $snap('0')], JSON_UNESCAPED_UNICODE));
 
-$port = 19000 + getmypid() % 1000;
-$srv = proc_open([PHP_BINARY, '-S', "127.0.0.1:$port", '-t', "$T/app", "$T/local/router.php"], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
-register_shutdown_function(function () use ($srv, $T) { proc_terminate($srv); exec('rm -rf ' . escapeshellarg($T)); });
-for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $port); $i++) usleep(100000);
-$req = function ($m, $q, $body = null, $clave = null) use ($port, $CLAVE) {
-    $ctx = stream_context_create(['http' => ['method' => $m, 'header' => 'X-CRM-Clave: ' . ($clave ?: $CLAVE) . "\r\nContent-Type: application/json",
-        'content' => $body === null ? '' : json_encode($body, JSON_UNESCAPED_UNICODE), 'ignore_errors' => true, 'timeout' => 30]]);
-    $r = file_get_contents("http://127.0.0.1:$port/api.php$q", false, $ctx);
-    preg_match('#HTTP/\S+ (\d+)#', $http_response_header[0], $mm);
-    return [(int) $mm[1], json_decode($r)];
+$port = pruebaServidor($T);
+$http = pruebaHttp($port);
+$SES = pruebaEntrar($http, 'admin.prueba');
+// Con $clave, la petición va con la clave del agente y sin sesión
+$req = function ($m, $q, $body = null, $clave = null) use ($http, $SES) {
+    $r = $clave ? $http($m, $q, $body, '', ['X-CRM-Clave: ' . $clave]) : $http($m, $q, $body, $SES);
+    return [$r[0], $r[1]];
 };
 $leer = function () use ($req) { [, $d] = $req('GET', '?accion=leer'); return $d; };
 $guardar = function ($data, $extra = []) use ($req, $leer) { $rev = (int) $leer()->rev; return $req('POST', '', array_merge(['baseRev' => $rev, 'data' => $data], $extra)); };

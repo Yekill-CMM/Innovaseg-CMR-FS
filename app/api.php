@@ -1,28 +1,29 @@
 <?php
 /* =========================================================================
-   CRM Comercial - API de guardado en el servidor
-   - GET  api.php?accion=leer  → datos completos {rev, savedAt, data}
-   - GET  api.php?accion=rev   → solo la revisión actual {rev, savedAt}
-   - POST api.php              → guarda {baseRev, data}; responde {rev}
-   - POST api.php?accion=ajustes → guarda {ajustes} (parámetros de configuración)
-   - GET  api.php?accion=agente → resumen compacto para un agente automático:
-     oportunidades abiertas con sus alertas y últimas notas, prospectos abiertos,
-     ofertas vigentes, tareas pendientes y empresas con sus contactos.
-   - POST api.php?accion=agente-escribir → cambios acotados del agente
-     {ops:[...]} (ver aplicarAgente): seguimiento, y altas de empresas, contactos
-     y prospectos. Las oportunidades solo llegan desde el funnel; el agente no
-     las crea ni cambia sus datos comerciales. Cada cambio queda en la auditoría
-     marcado «(Joan)» y las notas empiezan con «Joan:».
-   Clave del agente (opcional): CRM_CLAVE_AGENTE en config.php. Con ella se
-   puede leer y usar agente-escribir; nunca reemplazar los datos completos.
-     Si baseRev no coincide con la revisión del servidor (otro dispositivo
-     guardó antes), responde 409 con los datos actuales y no escribe nada.
-   Cada petición debe traer la clave de config.php en la cabecera X-CRM-Clave.
-   Los datos se guardan en datos/crm.json.php, con un respaldo por hora en
-   datos/historial (se conservan los últimos 72). Los parámetros de
-   configuración van aparte, en datos/ajustes.json.php: no cambian al
-   actualizar index.html ni al restaurar un respaldo. leer y rev los
-   devuelven en el campo "ajustes".
+   CRM FS - API del servidor (multiusuario)
+   Cuentas y sesión (cuentas.php):
+   - POST ?accion=entrar         ingreso en pasos: usuario y clave, clave propia si la actual es
+                                 temporal, segundo factor (código de 6 dígitos). Deja la cookie de sesión.
+   - POST ?accion=salir          cierra la sesión
+   - GET  ?accion=sesion         quién es la persona de la sesión
+   - POST ?accion=cambiar-clave  {actual, nueva}
+   - GET/POST ?accion=usuarios   administración de cuentas y traspaso de cartera (solo administrador)
+   Datos (siempre con los permisos de la persona: permisos.php):
+   - GET  ?accion=leer           lo que la persona puede ver {rev, savedAt, data, yo, usuarios}
+   - GET  ?accion=rev            solo la revisión actual {rev, savedAt}
+   - POST                        guarda {baseRev, data}: la copia de la pantalla se compara con lo que la
+                                 persona veía y cada alta, cambio y baja se revisa antes de aplicarla sobre
+                                 los datos completos. Responde {rev} (y {avisos, data} si algo no se aplicó).
+                                 Si baseRev no coincide con la revisión del servidor (otra persona u otro
+                                 dispositivo guardó antes), responde 409 con la vista actual y no escribe nada.
+   - POST ?accion=ajustes        guarda {ajustes} (parámetros de configuración; solo administrador)
+   - GET  ?accion=historial | eliminados, POST ?accion=restaurar: dentro del alcance de la persona
+   - GET  ?accion=agente, POST ?accion=agente-escribir: para un programa con la clave del agente
+     (CRM_CLAVE_AGENTE), que actúa con los permisos de la cuenta CRM_AGENTE_USUARIO.
+   Toda petición de la pantalla trae la cabecera X-CRM: 1 y la cookie de sesión (HttpOnly, SameSite=Strict).
+   Los datos se guardan en la base SQLite datos/crm.db, con la copia JSON de siempre en
+   datos/crm.json.php y respaldos en datos/historial. Las cuentas van en datos/cuentas.db. Los
+   parámetros de configuración van aparte, en datos/ajustes.json.php.
    ========================================================================= */
 
 header('Content-Type: application/json; charset=utf-8');
@@ -761,11 +762,12 @@ function leerActual() { global $PDO, $ARCHIVO, $CABECERA; return $PDO ? almLeer(
 // se escribe todo o nada. Después escribe el JSON de siempre como red de seguridad (y su respaldo por hora).
 // $extra: filas adicionales para «cambios» (p. ej. la fusión de una empresa o un contacto), en la misma transacción.
 function escribirDatos($data, $rev, $savedAt, $origen, $extra = []) {
-    global $PDO, $ARCHIVO, $CABECERA, $HISTORIAL, $MAX_HISTORIAL, $DIR_DATOS;
+    global $PDO, $ARCHIVO, $CABECERA, $HISTORIAL, $MAX_HISTORIAL, $DIR_DATOS, $USUARIO_ACTUAL;
+    $usr = isset($USUARIO_ACTUAL) ? $USUARIO_ACTUAL : null;
     if ($PDO) {
-        try { $PDO->exec('BEGIN IMMEDIATE'); almGuardar($PDO, $data, $rev, $savedAt, $origen);
-            $insX = $PDO->prepare('INSERT INTO cambios (rev, en, origen, tabla, registro, accion, antes, despues) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-            foreach ($extra as $x) $insX->execute([$rev, date('c'), $origen, $x['tabla'], $x['registro'], $x['accion'], almJson($x['antes']), almJson($x['despues'])]);
+        try { $PDO->exec('BEGIN IMMEDIATE'); almGuardar($PDO, $data, $rev, $savedAt, $origen, $usr);
+            $insX = $PDO->prepare('INSERT INTO cambios (rev, en, origen, tabla, registro, accion, antes, despues, usuario) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            foreach ($extra as $x) $insX->execute([$rev, date('c'), $origen, $x['tabla'], $x['registro'], $x['accion'], almJson($x['antes']), almJson($x['despues']), $usr]);
             $PDO->exec('COMMIT'); }
         catch (Exception $e) { try { $PDO->exec('ROLLBACK'); } catch (Exception $x) {} almLog($DIR_DATOS, 'Guardado fallido (no se escribió nada): ' . $e->getMessage()); return 'No se pudo guardar en la base de datos; no se perdió nada. Intenta de nuevo.'; }
         almRespaldo($PDO, $DIR_DATOS);
@@ -781,12 +783,10 @@ function escribirDatos($data, $rev, $savedAt, $origen, $extra = []) {
 }
 
 /* ---------- Clave ---------- */
-if (!defined('CRM_CLAVE') || CRM_CLAVE === '' || CRM_CLAVE === 'CAMBIA-ESTA-CLAVE') {
-    responder(503, ['error' => 'Define tu clave en config.php antes de usar el CRM.']);
-}
-if (strlen(CRM_CLAVE) < 10) {
-    responder(503, ['error' => 'La clave de config.php debe tener al menos 10 caracteres.']);
-}
+/* Desde aquí se atiende la petición. Cada persona entra con su cuenta (cuentas.php) y
+   los permisos de su rol y equipo se aplican en cada lectura y escritura (permisos.php). */
+require __DIR__ . '/cuentas.php';
+require __DIR__ . '/permisos.php';
 /* Origen de la petición:
    - local:      desde el mismo servidor (Joan en joansvr), sin pasar por ningún proxy
    - tailnet:    desde tu red Tailscale. Tailscale Serve agrega Tailscale-User-Login
@@ -883,24 +883,6 @@ function registrarFallo($f, $cab, $ip) {
     if ($h) { flock($h, LOCK_UN); fclose($h); }
 }
 
-$clave = isset($_SERVER['HTTP_X_CRM_CLAVE']) ? (string) $_SERVER['HTTP_X_CRM_CLAVE'] : '';
-$esAgente = defined('CRM_CLAVE_AGENTE') && strlen(CRM_CLAVE_AGENTE) >= 16 && hash_equals(CRM_CLAVE_AGENTE, $clave);
-// La clave del agente solo sirve dentro del servidor o desde tu red Tailscale, nunca desde internet
-// (salvo que config.php defina CRM_AGENTE_PUBLICO en true, p. ej. en un hosting).
-if ($esAgente && ($origen === 'cloudflare' || ($origen === 'publico' && !(defined('CRM_AGENTE_PUBLICO') && CRM_AGENTE_PUBLICO === true)))) {
-    if ($origen !== 'local') registrarFallo($INTENTOS, $CABECERA, $ipCliente);
-    usleep(500000);
-    responder(403, ['error' => 'La clave del agente no se acepta desde internet.']);
-}
-if ($esAgente && $_SERVER['REQUEST_METHOD'] !== 'GET' && (isset($_GET['accion']) ? $_GET['accion'] : '') !== 'agente-escribir') {
-    responder(403, ['error' => 'Con la clave del agente solo se puede leer o usar agente-escribir.']);
-}
-if (!$esAgente && !hash_equals(CRM_CLAVE, $clave)) {
-    if ($origen !== 'local') registrarFallo($INTENTOS, $CABECERA, $ipCliente);
-    usleep(500000);   // frena intentos repetidos
-    responder(401, ['error' => 'Clave incorrecta.']);
-}
-
 /* ---------- Carpeta de datos ---------- */
 if (!is_dir($DIR_DATOS) && !@mkdir($DIR_DATOS, 0750, true)) {
     responder(500, ['error' => 'No se pudo crear la carpeta datos. Revisa los permisos de la carpeta del CRM.']);
@@ -912,68 +894,203 @@ if (!is_file($DIR_DATOS . '/.htaccess')) {
 $metodo = $_SERVER['REQUEST_METHOD'];
 $accion = isset($_GET['accion']) ? $_GET['accion'] : 'leer';
 
-/* ---------- Chat con Joan (panel del CRM) ----------
-   POST ?accion=joan            {texto, contexto, hilo} → {id, hilo}
-   GET  ?accion=joan-respuesta&id=…                    → {estado, texto, hilo, posicion}
-   Solo con la clave del CRM (no la del agente) y solo desde Tailscale o el propio
-   servidor: desde internet (Funnel) se rechaza. Reenvía al servicio joan-chat de
-   joansvr (127.0.0.1), que responde al tiro: Joan trabaja en segundo plano porque
-   php -S atiende una petición a la vez y Joan usa esta misma API. */
-if ($accion === 'joan' || $accion === 'joan-respuesta' || $accion === 'joan-estado') {
-    if ($esAgente) responder(403, ['error' => 'El chat no se usa con la clave del agente.']);
-    if ($origen === 'publico') responder(403, ['error' => 'El chat con Joan solo funciona por Tailscale o por Cloudflare Access.', 'fuera_tailnet' => true]);
-    $envChat = defined('JOAN_CHAT_ENV') ? JOAN_CHAT_ENV : dirname(__DIR__, 2) . '/joan/chat.env';
-    $cfgChat = is_readable($envChat) ? (parse_ini_file($envChat, false, INI_SCANNER_RAW) ?: []) : [];
-    $claveChat = isset($cfgChat['CHAT_CLAVE']) ? trim($cfgChat['CHAT_CLAVE'], "\"' ") : '';
-    $puertoChat = isset($cfgChat['CHAT_PUERTO']) ? (int) $cfgChat['CHAT_PUERTO'] : 8789;
-    if ($claveChat === '') responder(503, ['error' => 'Joan no está instalado en este servidor (falta ~/joan/chat.env). Corre local/instalar-chat.sh en joansvr.']);
-    if ($accion === 'joan') {
-        if ($metodo !== 'POST') responder(405, ['error' => 'Usa POST.']);
-        $in = json_decode((string) file_get_contents('php://input'), true);
-        if (!is_array($in)) responder(400, ['error' => 'Mensaje mal formado.']);
-        $ruta = '/mensaje'; $metodoChat = 'POST';
-        $cuerpoChat = json_encode(['texto' => (string) ($in['texto'] ?? ''), 'contexto' => (string) ($in['contexto'] ?? ''), 'hilo' => (string) ($in['hilo'] ?? '')]);
-    } elseif ($accion === 'joan-respuesta') {
-        $ruta = '/respuesta?id=' . rawurlencode((string) ($_GET['id'] ?? '')); $metodoChat = 'GET'; $cuerpoChat = null;
-    } else {
-        $ruta = '/estado'; $metodoChat = 'GET'; $cuerpoChat = null;
-    }
-    $ctx = stream_context_create(['http' => [
-        'method' => $metodoChat, 'timeout' => 5, 'ignore_errors' => true,
-        'header' => "X-Joan-Clave: $claveChat\r\nContent-Type: application/json\r\n",
-        'content' => $cuerpoChat === null ? '' : $cuerpoChat,
-    ]]);
-    $resp = @file_get_contents("http://127.0.0.1:$puertoChat$ruta", false, $ctx);
-    if ($resp === false) responder(502, ['error' => 'Joan no responde en el servidor (servicio joan-chat). Revisa: systemctl status joan-chat']);
-    $codigo = 502;
-    foreach ($http_response_header ?? [] as $h) if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) $codigo = (int) $m[1];
-    $j = json_decode($resp, true);
-    responder($codigo, is_array($j) ? $j : ['error' => 'Respuesta inválida del servicio de Joan.']);
+try { $CTA = ctaAbrir($DIR_DATOS); } catch (Exception $e) { $CTA = null; }
+if (!$CTA) responder(503, ['error' => 'Las cuentas de usuario necesitan SQLite en el PHP del servidor (paquete php-sqlite3).']);
+
+/* Clave del agente (opcional): un programa (Joan) lee y escribe con los permisos de la cuenta
+   CRM_AGENTE_USUARIO. Sin esa cuenta definida y activa, la clave no sirve. Solo dentro del
+   servidor o la red Tailscale, salvo CRM_AGENTE_PUBLICO. */
+$clave = isset($_SERVER['HTTP_X_CRM_CLAVE']) ? (string) $_SERVER['HTTP_X_CRM_CLAVE'] : '';
+$esAgente = $clave !== '' && defined('CRM_CLAVE_AGENTE') && strlen(CRM_CLAVE_AGENTE) >= 16 && hash_equals(CRM_CLAVE_AGENTE, $clave);
+if ($clave !== '' && !$esAgente) {
+    if ($origen !== 'local') registrarFallo($INTENTOS, $CABECERA, $ipCliente);
+    usleep(500000);
+    responder(401, ['error' => 'Clave incorrecta.']);
+}
+if ($esAgente && ($origen === 'cloudflare' || ($origen === 'publico' && !(defined('CRM_AGENTE_PUBLICO') && CRM_AGENTE_PUBLICO === true)))) {
+    if ($origen !== 'local') registrarFallo($INTENTOS, $CABECERA, $ipCliente);
+    usleep(500000);
+    responder(403, ['error' => 'La clave del agente no se acepta desde internet.']);
+}
+if ($esAgente && !in_array($accion, ['agente', 'agente-escribir'], true)) {
+    responder(403, ['error' => 'Con la clave del agente solo se puede usar agente y agente-escribir.']);
+}
+// Toda petición de la pantalla trae la cabecera X-CRM: una página de otro sitio no puede agregarla (ni leer la respuesta)
+if (!$esAgente && (!isset($_SERVER['HTTP_X_CRM']) || $_SERVER['HTTP_X_CRM'] !== '1')) {
+    responder(403, ['error' => 'Petición no válida.']);
 }
 
-$PDO = almAbrir($DIR_DATOS, $ARCHIVO, $CABECERA);
+$esHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') || $porCloudflare;
+$rutaCookie = rtrim(str_replace('\\', '/', dirname(isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/api.php')), '/') . '/';
+function ponerCookie($valor, $hasta) {
+    global $esHttps, $rutaCookie;
+    setcookie('crm_sesion', $valor, ['expires' => $hasta, 'path' => $rutaCookie, 'secure' => $esHttps, 'httponly' => true, 'samesite' => 'Strict']);
+}
+$tokenSesion = isset($_COOKIE['crm_sesion']) ? (string) $_COOKIE['crm_sesion'] : '';
+$agenteNav = isset($_SERVER['HTTP_USER_AGENT']) ? (string) $_SERVER['HTTP_USER_AGENT'] : '';
+
+/* ---------- Ingreso y salida ----------
+   POST ?accion=entrar  {usuario, clave} | {desafio, nueva_clave} | {desafio, codigo}  (ver ctaEntrar)
+   POST ?accion=salir   cierra la sesión de este navegador */
+if ($accion === 'entrar') {
+    if ($metodo !== 'POST') responder(405, ['error' => 'Usa POST.']);
+    $in = json_decode((string) file_get_contents('php://input'));
+    [$cod, $cuerpo, $tok] = ctaEntrar($CTA, $in, $ipCliente, $agenteNav);
+    if ($cod === 401 && $origen !== 'local') { registrarFallo($INTENTOS, $CABECERA, $ipCliente); usleep(300000); }
+    if ($tok) ponerCookie($tok, time() + (int) (ctaHorasSesion() * 3600));
+    unset($cuerpo['fallo']);
+    responder($cod, $cuerpo);
+}
+if ($accion === 'salir') {
+    if ($metodo !== 'POST') responder(405, ['error' => 'Usa POST.']);
+    $s = ctaToken($CTA, $tokenSesion, 'sesion');
+    if ($s) { ctaEvento($CTA, $s['usuario_id'], $s['usuario_id'], 'salida', '', $ipCliente); ctaBorrarToken($CTA, $tokenSesion); }
+    ponerCookie('', time() - 3600);
+    responder(200, ['ok' => true]);
+}
+
+/* ---------- Quién hace la petición ---------- */
+if ($esAgente) {
+    $fila = defined('CRM_AGENTE_USUARIO') ? ctaFilaPorUsuario($CTA, CRM_AGENTE_USUARIO) : null;
+    if (!$fila || !(int) $fila['activo']) responder(403, ['error' => 'La clave del agente no tiene una cuenta activa asociada (CRM_AGENTE_USUARIO en config.php).']);
+} else {
+    $fila = ctaSesionActual($CTA, $tokenSesion);
+    if (!$fila) { if ($tokenSesion !== '') ponerCookie('', time() - 3600); responder(401, ['error' => 'Inicia sesión con tu usuario.', 'sesion' => false]); }
+}
+$YO = ctaPublico($fila);
+$CTX = permCtx($YO, ctaDirectorio($CTA));
+$USUARIO_ACTUAL = $YO->id;   // queda en «cambios» junto con cada alta, cambio y baja
+
+if ($accion === 'sesion') responder(200, ['usuario' => $YO]);
+
+// Cambiar la propia clave: pide la actual. Cierra las otras sesiones de la persona.
+if ($accion === 'cambiar-clave') {
+    if ($metodo !== 'POST') responder(405, ['error' => 'Usa POST.']);
+    $in = json_decode((string) file_get_contents('php://input'));
+    if (!is_object($in) || !password_verify(isset($in->actual) ? (string) $in->actual : '', $fila['clave_hash'])) { usleep(300000); responder(400, ['error' => 'La clave actual no es correcta.']); }
+    if (password_verify(isset($in->nueva) ? (string) $in->nueva : '', $fila['clave_hash'])) responder(400, ['error' => 'La clave nueva debe ser distinta de la actual.']);
+    $e = ctaCambiarClave($CTA, $YO->id, isset($in->nueva) ? (string) $in->nueva : '');
+    if ($e) responder(400, ['error' => $e]);
+    ctaCerrarSesiones($CTA, $YO->id);
+    ponerCookie(ctaNuevoToken($CTA, $YO->id, 'sesion', ctaHorasSesion() * 3600, null, $ipCliente, $agenteNav), time() + (int) (ctaHorasSesion() * 3600));
+    responder(200, ['ok' => true]);
+}
+
+/* ---------- Administración de cuentas (solo administrador) ----------
+   GET  ?accion=usuarios → cuentas con su estado
+   POST ?accion=usuarios {op: crear | editar | clave | segundo-factor | traspasar, …} */
+if ($accion === 'usuarios') {
+    if (!$CTX->admin) responder(403, ['error' => 'Solo el administrador administra las cuentas.']);
+    if ($metodo === 'GET') {
+        $out = [];
+        foreach ($CTA->query('SELECT * FROM usuarios ORDER BY activo DESC, nombre') as $r) {
+            $p = ctaPublico($r);
+            $p->segundoFactor = (bool) $r['totp_activo']; $p->claveTemporal = (bool) $r['clave_temporal'];
+            $p->bloqueada = (int) $r['bloqueado_hasta'] > time(); $p->ultimoIngreso = $r['ultimo_ingreso'];
+            $out[] = $p;
+        }
+        responder(200, ['usuarios' => $out, 'roles' => CTA_ETIQUETAS]);
+    }
+    if ($metodo !== 'POST') responder(405, ['error' => 'Método no permitido.']);
+    $in = json_decode((string) file_get_contents('php://input'));
+    $op = is_object($in) && isset($in->op) ? (string) $in->op : '';
+    $id = is_object($in) && isset($in->id) ? (string) $in->id : '';
+    if ($op === 'crear') {
+        [$e, $nid, $temp] = ctaCrear($CTA, $in, $YO->id);
+        if ($e) responder(400, ['error' => $e]);
+        responder(200, ['ok' => true, 'id' => $nid, 'claveTemporal' => $temp]);
+    }
+    if ($op === 'editar') {
+        if ($id === $YO->id && isset($in->activo) && empty($in->activo)) responder(400, ['error' => 'No puedes desactivar tu propia cuenta.']);
+        $e = ctaEditar($CTA, $id, $in, $YO->id);
+        if ($e) responder(400, ['error' => $e]);
+        responder(200, ['ok' => true]);
+    }
+    if ($op === 'clave') {
+        [$temp, $e] = ctaReiniciarClave($CTA, $id, $YO->id);
+        if ($e) responder(400, ['error' => $e]);
+        responder(200, ['ok' => true, 'claveTemporal' => $temp]);
+    }
+    if ($op === 'segundo-factor') {
+        $e = ctaReiniciarSegundoFactor($CTA, $id, $YO->id);
+        if ($e) responder(400, ['error' => $e]);
+        responder(200, ['ok' => true]);
+    }
+    if ($op === 'traspasar') {
+        // La cartera de una persona pasa a otra: prospectos, planes, oportunidades, ofertas, tareas abiertas y empresas a su cargo.
+        // Las actividades y las tareas cerradas siguen con quien las hizo (el historial conserva quién hizo cada cosa).
+        $de = is_object($in) && isset($in->de) ? (string) $in->de : ''; $a = is_object($in) && isset($in->a) ? (string) $in->a : '';
+        $fa = ctaFila($CTA, $a);
+        if ($de === '' || !ctaFila($CTA, $de) || !$fa || !(int) $fa['activo'] || $de === $a) responder(400, ['error' => 'Elige a la persona que entrega y a una persona activa distinta que recibe.']);
+        $PDO = almAbrir($DIR_DATOS, $ARCHIVO, $CABECERA);
+        $lock = fopen($DIR_DATOS . '/.lock', 'c');
+        if (!$lock || !flock($lock, LOCK_EX)) responder(500, ['error' => 'No se pudo bloquear el archivo de datos.']);
+        $actual = leerActual();
+        if (!$actual->data) { flock($lock, LOCK_UN); responder(409, ['error' => 'El CRM aún no tiene datos.']); }
+        $n = [];
+        foreach (['leads' => 'ownerId', 'plans' => 'ownerId', 'opps' => 'ownerId', 'offers' => 'ownerId', 'companies' => 'ownerId', 'tasks' => 'assigneeId'] as $t => $campo)
+            foreach (permLista($actual->data, $t) as $x) {
+                if (permTxt($x, $campo) !== $de) continue;
+                if ($t === 'tasks' && !in_array(permTxt($x, 'status'), ['Pendiente', 'En curso'], true)) continue;
+                $x->$campo = $a; $n[$t] = ($n[$t] ?? 0) + 1;
+            }
+        if (isset($actual->data->config->targets->$de) && !isset($actual->data->config->targets->$a)) { $actual->data->config->targets->$a = $actual->data->config->targets->$de; }
+        $nrev = (int) $actual->rev + 1;
+        $err = $n ? escribirDatos($actual->data, $nrev, isset($actual->data->savedAt) ? $actual->data->savedAt : 0, 'traspaso') : '';
+        flock($lock, LOCK_UN);
+        if ($err) responder(500, ['error' => $err]);
+        ctaEvento($CTA, $de, $YO->id, 'cartera traspasada', 'a ' . $fa['nombre'] . ': ' . json_encode($n, JSON_UNESCAPED_UNICODE));
+        responder(200, ['ok' => true, 'traspasados' => (object) $n, 'rev' => $n ? $nrev : null]);
+    }
+    responder(400, ['error' => 'Operación no reconocida.']);
+}
+
+/* ---------- Chat con Joan ----------
+   El Joan de la versión de una sola persona (servicio joan-chat del servidor de Claudio) no se usa
+   aquí. Joan por usuario, con la clave de API de cada uno, llega en una fase posterior. */
+if ($accion === 'joan' || $accion === 'joan-respuesta' || $accion === 'joan-estado') {
+    responder(403, ['error' => 'Joan por usuario todavía no está disponible.']);
+}
+
+$PDO = almAbrir($DIR_DATOS, $ARCHIVO, $CABECERA);   // null: se sigue con el JSON (sin historial ni recuperación)
+
+// Lo que esta persona ve de un documento {rev, savedAt, data}
+function vistaDe($doc) {
+    global $CTX;
+    $v = (object) ['rev' => $doc->rev, 'savedAt' => $doc->savedAt, 'data' => $doc->data ? permVista($doc->data, $CTX) : null];
+    return $v;
+}
 
 /* ---------- Lectura ---------- */
 if ($metodo === 'GET') {
-    if ($accion === 'historial') {   // historial completo de un registro (solo con la clave del CRM)
-        if ($esAgente) responder(403, ['error' => 'No disponible con la clave del agente.']);
+    if ($accion === 'historial') {   // historial completo de un registro que la persona puede ver
         $t = isset($_GET['tabla']) ? (string) $_GET['tabla'] : ''; $i = isset($_GET['id']) ? (string) $_GET['id'] : '';
-        responder(200, ['almacen' => $PDO ? 'sqlite' : 'json', 'historial' => $PDO && $t !== '' && $i !== '' ? almHistorial($PDO, $t, $i) : []]);
+        if (!$PDO) responder(200, ['almacen' => 'json', 'historial' => []]);
+        $st = $PDO->prepare('SELECT datos FROM registros WHERE tabla = ? AND id = ?'); $st->execute([$t, $i]); $dat = $st->fetchColumn();
+        if ($t === '' || $i === '' || $dat === false || !permVeRegistro($CTX, leerActual()->data, $t, json_decode($dat))) responder(200, ['almacen' => 'sqlite', 'historial' => []]);
+        responder(200, ['almacen' => 'sqlite', 'historial' => almHistorial($PDO, $t, $i)]);
     }
-    if ($accion === 'eliminados') {   // registros eliminados que se pueden recuperar (solo con la clave del CRM)
-        if ($esAgente) responder(403, ['error' => 'No disponible con la clave del agente.']);
-        responder(200, ['almacen' => $PDO ? 'sqlite' : 'json', 'eliminados' => $PDO ? almEliminados($PDO) : []]);
+    if ($accion === 'eliminados') {   // registros eliminados que la persona puede recuperar
+        if (!$PDO) responder(200, ['almacen' => 'json', 'eliminados' => []]);
+        $full = leerActual()->data;
+        responder(200, ['almacen' => 'sqlite', 'eliminados' => almEliminados($PDO, 100, function ($t, $d) use ($full) { global $CTX; return permRecupera($CTX, $full, $t, $d); })]);
     }
     if ($accion === 'rev') {   // liviano: sin leer todos los datos
-        $rev = $PDO ? (int) almMeta($PDO, 'rev') : (int) leerDatos($ARCHIVO, $CABECERA)->rev;
-        responder(200, ['rev' => $rev, 'savedAt' => $PDO ? almMeta($PDO, 'savedAt') : null, 'ajustes' => leerAjustes($AJUSTES, $CABECERA), 'almacen' => $esAgente ? null : almEstado($PDO, $DIR_DATOS)]);
+        responder(200, ['rev' => $PDO ? (int) almMeta($PDO, 'rev') : (int) leerDatos($ARCHIVO, $CABECERA)->rev, 'savedAt' => $PDO ? almMeta($PDO, 'savedAt') : null, 'ajustes' => permAjustesVista(leerAjustes($AJUSTES, $CABECERA), $CTX), 'almacen' => $esAgente ? null : almEstado($PDO, $DIR_DATOS)]);
     }
     $actual = leerActual();
-    $ajustes = leerAjustes($AJUSTES, $CABECERA);
-    if ($accion === 'agente') responder(200, resumenAgente($actual, $ajustes));
-    $actual->ajustes = $ajustes;
-    $actual->almacen = almEstado($PDO, $DIR_DATOS);
-    responder(200, $actual);
+    $ajustes = permAjustesVista(leerAjustes($AJUSTES, $CABECERA), $CTX);
+    if ($accion === 'agente') {
+        if (!$actual->data) responder(200, resumenAgente((object) ['rev' => 0, 'data' => (object) []], $ajustes));
+        responder(200, resumenAgente(vistaDe($actual), $ajustes));
+    }
+    if ($esAgente) responder(403, ['error' => 'Con la clave del agente solo se puede usar agente y agente-escribir.']);
+    $v = vistaDe($actual);
+    $v->ajustes = $ajustes;
+    $v->almacen = almEstado($PDO, $DIR_DATOS);
+    $v->yo = $YO;
+    $v->usuarios = permVista((object) [], $CTX)->users;
+    responder(200, $v);
 }
 
 /* ---------- Escritura ---------- */
@@ -985,7 +1102,7 @@ if ($metodo === 'POST') {
     }
     $cuerpo = json_decode($entrada);
 
-    // Cambios acotados del agente: se aplican sobre la versión actual del servidor
+    // Cambios acotados del agente: se aplican sobre lo que ve su cuenta y pasan por los mismos permisos
     if ($accion === 'agente-escribir') {
         if (!is_object($cuerpo) || !isset($cuerpo->ops) || !is_array($cuerpo->ops) || !$cuerpo->ops) responder(400, ['error' => 'Envía {"ops":[...]} con al menos un cambio.']);
         if (count($cuerpo->ops) > 50) responder(400, ['error' => 'Máximo 50 cambios por llamada.']);
@@ -993,15 +1110,17 @@ if ($metodo === 'POST') {
         if (!$lock || !flock($lock, LOCK_EX)) responder(500, ['error' => 'No se pudo bloquear el archivo de datos.']);
         $actual = leerActual();
         if (!$actual->data) { flock($lock, LOCK_UN); responder(409, ['error' => 'El CRM aún no tiene datos.']); }
-        try { $hecho = aplicarAgente($actual->data, $cuerpo->ops); }
+        $vista = permVista($actual->data, $CTX);
+        try { $hecho = aplicarAgente($vista, $cuerpo->ops); $nuevo = permAplicar($actual->data, $vista, $CTX); }
         catch (Exception $e) { flock($lock, LOCK_UN); responder(400, ['error' => $e->getMessage()]); }
+        if ($CTX->avisos) { flock($lock, LOCK_UN); responder(403, ['error' => implode(' ', $CTX->avisos)]); }
         $nrev = (int) $actual->rev + 1;
-        $err = escribirDatos($actual->data, $nrev, $actual->data->savedAt, 'Joan');
+        $err = escribirDatos($nuevo, $nrev, isset($actual->data->savedAt) ? $actual->data->savedAt : 0, 'Joan');
         flock($lock, LOCK_UN);
         if ($err) responder(500, ['error' => $err]);
         responder(200, ['ok' => true, 'rev' => $nrev, 'hecho' => $hecho]);
     }
-    if ($esAgente) responder(403, ['error' => 'Con la clave del agente solo se puede leer o usar agente-escribir.']);
+    if ($esAgente) responder(403, ['error' => 'Con la clave del agente solo se puede usar agente y agente-escribir.']);
 
     // Recuperar un registro eliminado (vuelve con sus últimos datos; queda en el historial)
     if ($accion === 'restaurar') {
@@ -1009,7 +1128,10 @@ if ($metodo === 'POST') {
         $t = isset($cuerpo->tabla) ? (string) $cuerpo->tabla : ''; $i = isset($cuerpo->id) ? (string) $cuerpo->id : '';
         $lock = fopen($DIR_DATOS . '/.lock', 'c');
         if (!$lock || !flock($lock, LOCK_EX)) responder(500, ['error' => 'No se pudo bloquear el archivo de datos.']);
-        try { $PDO->exec('BEGIN IMMEDIATE'); $nrev = almRestaurar($PDO, $t, $i, 'pantalla'); $PDO->exec('COMMIT'); }
+        $st = $PDO->prepare('SELECT datos FROM registros WHERE tabla = ? AND id = ? AND eliminado_en IS NOT NULL'); $st->execute([$t, $i]); $dat = $st->fetchColumn();
+        if ($dat === false) { flock($lock, LOCK_UN); responder(404, ['error' => 'No hay un registro eliminado con ese id.']); }
+        if (!permRecupera($CTX, leerActual()->data, $t, json_decode($dat))) { flock($lock, LOCK_UN); responder(403, ['error' => 'No tienes permiso para recuperar ese registro.']); }
+        try { $PDO->exec('BEGIN IMMEDIATE'); $nrev = almRestaurar($PDO, $t, $i, 'pantalla', $USUARIO_ACTUAL); $PDO->exec('COMMIT'); }
         catch (Exception $e) { try { $PDO->exec('ROLLBACK'); } catch (Exception $x) {} flock($lock, LOCK_UN); responder(500, ['error' => 'No se pudo recuperar.']); }
         if (!$nrev) { flock($lock, LOCK_UN); responder(404, ['error' => 'No hay un registro eliminado con ese id.']); }
         $doc = almLeer($PDO);
@@ -1018,8 +1140,9 @@ if ($metodo === 'POST') {
         responder(200, ['ok' => true, 'rev' => $nrev]);
     }
 
-    // Parámetros de configuración: archivo propio, sin control de revisión
+    // Parámetros de configuración: archivo propio, sin control de revisión. Solo el administrador.
     if ($accion === 'ajustes') {
+        if (!$CTX->admin) responder(403, ['error' => 'Solo el administrador cambia la configuración.']);
         if (!is_object($cuerpo) || !isset($cuerpo->ajustes) || !is_object($cuerpo->ajustes)) {
             responder(400, ['error' => 'Los ajustes enviados no tienen el formato esperado.']);
         }
@@ -1032,36 +1155,51 @@ if ($metodo === 'POST') {
         responder(200, ['ok' => true]);
     }
 
+    if ($accion !== 'leer' && $accion !== '') responder(400, ['error' => 'Acción no reconocida.']);
     if (!is_object($cuerpo) || !isset($cuerpo->data) || !is_object($cuerpo->data)
         || !isset($cuerpo->data->companies) || !is_array($cuerpo->data->companies)) {
         responder(400, ['error' => 'Los datos enviados no tienen el formato del CRM.']);
     }
+    $reemplazo = isset($cuerpo->reemplazo) && $cuerpo->reemplazo === true;
+    if ($reemplazo && !$CTX->admin) responder(403, ['error' => 'Solo el administrador puede reemplazar todos los datos (restaurar un respaldo o empezar de cero).']);
 
     $lock = fopen($DIR_DATOS . '/.lock', 'c');
     if (!$lock || !flock($lock, LOCK_EX)) responder(500, ['error' => 'No se pudo bloquear el archivo de datos.']);
 
     $actual = leerActual();
+    if ($actual->data === null && !$CTX->admin) { flock($lock, LOCK_UN); responder(403, ['error' => 'El CRM aún no tiene datos: el administrador debe iniciarlo.']); }
     $base = isset($cuerpo->baseRev) ? (int) $cuerpo->baseRev : -1;
     if ($actual->data !== null && $base !== (int) $actual->rev) {
         flock($lock, LOCK_UN);
-        responder(409, $actual);   // otro dispositivo guardó antes
+        responder(409, vistaDe($actual));   // otra persona u otro dispositivo guardó antes
     }
+
+    // Cada alta, cambio y baja se revisa contra los permisos y se aplica sobre los datos completos
+    if ($reemplazo || $actual->data === null) {
+        $nuevo = permCopia($cuerpo->data);
+        foreach (PERM_NO_GUARDAR as $k) unset($nuevo->$k);
+    } else {
+        try { $nuevo = permAplicar($actual->data, $cuerpo->data, $CTX); }
+        catch (PermRechazo $e) { flock($lock, LOCK_UN); $v = vistaDe($actual); $v->error = $e->getMessage(); $v->rechazo = true; responder(422, $v); }
+    }
+    $avisos = $CTX->avisos;
 
     // Empresas y contactos que dejan de venir: solo sin historial o fusionados (ver validarBajas)
     $extra = [];
-    if ($actual->data !== null && !(isset($cuerpo->reemplazo) && $cuerpo->reemplazo === true)) {
-        list($errBaja, $extra) = validarBajas($actual->data, $cuerpo->data);
+    if ($actual->data !== null && !$reemplazo) {
+        list($errBaja, $extra) = validarBajas($actual->data, $nuevo);
         if ($errBaja !== '') {
             flock($lock, LOCK_UN);
-            $actual->error = $errBaja; $actual->rechazo = true;
-            responder(422, $actual);   // la pantalla vuelve a la versión del servidor y muestra el motivo
+            $v = vistaDe($actual); $v->error = $errBaja; $v->rechazo = true;
+            responder(422, $v);   // la pantalla vuelve a la versión del servidor y muestra el motivo
         }
     }
 
     $nrev = (int) $actual->rev + 1;
-    $err = escribirDatos($cuerpo->data, $nrev, isset($cuerpo->data->savedAt) ? $cuerpo->data->savedAt : 0, 'pantalla', $extra);
+    $err = escribirDatos($nuevo, $nrev, isset($cuerpo->data->savedAt) ? $cuerpo->data->savedAt : 0, 'pantalla', $extra);
     flock($lock, LOCK_UN);
     if ($err) responder(500, ['error' => $err]);
+    if ($avisos) responder(200, ['rev' => $nrev, 'avisos' => $avisos, 'data' => permVista($nuevo, $CTX)]);   // la pantalla toma su vista: lo no permitido no quedó
     responder(200, ['rev' => $nrev]);
 }
 
