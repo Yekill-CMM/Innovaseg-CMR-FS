@@ -1,0 +1,9 @@
+{
+  "name": "innovaseg-crm-fs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CRM Comercial multiusuario para First Security (Innovaseg)",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

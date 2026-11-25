@@ -1,0 +1,35 @@
+{
+    "auto": {
+        "on": 1,
+        "noTask": 1,
+        "idle": 1,
+        "follow": 1,
+        "stage": 1
+    },
+    "clientNoAct": 30,
+    "plazos": {
+        "One Shot": {
+            "warn": 30,
+            "risk": 60,
+            "remind": 20,
+            "yellow": 25,
+            "red": 30,
+            "stalled": 90
+        }
+    },
+    "uf": 41200,
+    "usd": 950,
+    "followup": {
+        "remind": 3,
+        "yellow": 7,
+        "red": 14
+    },
+    "oppNoAct": {
+        "warn": 10,
+        "risk": 20
+    },
+    "leadNoAct": 14,
+    "stalledDays": 30,
+    "offerExpiry": 15,
+    "metaBase": "factura"
+}
