@@ -118,8 +118,8 @@ function resumenAgente($actual, $ajustes) {
     $sinAct0 = isset($cfg['oppNoAct']) ? $cfg['oppNoAct'] : ['warn' => 10, 'risk' => 20];
     $estancada0 = isset($cfg['stalledDays']) ? $cfg['stalledDays'] : 30;
     $sinAct = $sinAct0;
-    // Valor de la oportunidad: «Proyección» del Excel; si no viene, único + mensual × plazo
-    $valor = function ($o) { return !empty($o->fx->proj) && (float) $o->fx->proj > 0 ? (float) $o->fx->proj : (float) $o->oneTime + (float) $o->monthly * (float) $o->term; };
+    // Valor de la oportunidad: «Proyección» del Excel; si no, el booking (habilitación + mensual × meses desde la primera facturación hasta diciembre; One Shot: el monto) y, en las antiguas, único + mensual × plazo
+    $valor = function ($o) { return !empty($o->fx->proj) && (float) $o->fx->proj > 0 ? (float) $o->fx->proj : (!empty($o->primeraFact) ? (($o->tipo ?? '') === 'One Shot' ? (float) $o->oneTime : (float) $o->oneTime + (float) $o->monthly * max(0, 13 - (int) substr($o->primeraFact, 5, 2))) : (float) $o->oneTime + (float) $o->monthly * (float) $o->term); };
     // En una oportunidad solo se mira el estatus (Excel) y se gestionan tareas: su próxima acción es su próxima tarea pendiente
     $tareasOpp = [];
     foreach ((array) (isset($d->tasks) ? $d->tasks : []) as $t) if ($t->entityType === 'opp' && in_array($t->status, ['Pendiente', 'En curso'], true)) $tareasOpp[$t->entityId][] = $t;

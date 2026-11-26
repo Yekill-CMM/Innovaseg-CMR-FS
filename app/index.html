@@ -1176,7 +1176,37 @@ const ctname=id=>{const k=byId(S.contacts,id);return k?k.firstName+' '+k.lastNam
 const stageOf=id=>STAGES.find(s=>s.id===id);
 const toCLP=(v,cur)=>(Number(v)||0)*(cur==='UF'?S.config.uf:cur==='USD'?S.config.usd:1);
 // Valor de la oportunidad: la «Proyección» del Excel de Gerencia (fuente única). Solo si no viene, se estima con único + mensual × plazo.
-const tcv=o=>o.fx&&Number(o.fx.proj)>0?Number(o.fx.proj):toCLP((Number(o.oneTime)||0)+(Number(o.monthly)||0)*(Number(o.term)||0),o.currency);
+/* Montos por tipo de negocio (Claudio, 26-11-2026), igual que el funnel de Gerencia:
+   - Seguridad Física: siempre mensual.
+   - Seguridad Electrónica: One Shot (un solo monto, tipo «One Shot») o cargo de habilitación + mensualidades.
+   - Seguridad Integral: mezcla las dos, con el mensual físico y la parte electrónica (habilitación + mensual) separados.
+   Booking (columna «Proyección») = habilitación + (mensual física + mensual electrónica) × (13 − mes de primera
+   facturación): el mes de la primera facturación cuenta completo y se suma hasta diciembre. En One Shot, el monto del
+   proyecto. El plazo del contrato queda como dato informativo. El booking es del año en que se cierra la oportunidad;
+   para la meta cuenta lo facturado en el año (metaBase 'factura').
+   o.montos={fis,ele,hab,one} en la moneda de la oportunidad, o.primeraFact='AAAA-MM'. oneTime y monthly se mantienen
+   (hab+one y fis+ele) para lo que ya los lee. Las oportunidades antiguas, sin montos separados, siguen con único + mensual × plazo. */
+const MONTOS_CAMPOS={'Seg. Física':['fis'],'Seg. Electrónica':['hab','ele'],'Seg. Integral':['fis','hab','ele'],'One Shot':['one']};
+const MONTO_NOM={fis:'mFis',ele:'mEle',hab:'mHab',one:'mOne'};
+function montosDe(o){if(o&&o.montos)return Object.assign({fis:0,ele:0,hab:0,one:0},o.montos);const t=tipoDe(o),one=Number(o&&o.oneTime)||0,mon=Number(o&&o.monthly)||0;
+ if(t==='One Shot')return{fis:0,ele:0,hab:0,one:one+mon*(Number(o.term)||0)};if(t==='Seg. Electrónica')return{fis:0,ele:mon,hab:one,one:0};return{fis:mon,ele:0,hab:one,one:0}}
+const mesesBooking=pf=>{const m=Number(String(pf||'').slice(5,7));return m>=1&&m<=12?13-m:0};
+const bookingDe=o=>{const m=montosDe(o);return tipoDe(o)==='One Shot'?m.one:m.hab+(m.fis+m.ele)*mesesBooking(o.primeraFact)};
+const tcv=o=>o.fx&&Number(o.fx.proj)>0?Number(o.fx.proj):o.primeraFact?toCLP(bookingDe(o),o.currency):toCLP((Number(o.oneTime)||0)+(Number(o.monthly)||0)*(Number(o.term)||0),o.currency);
+// Lee los campos de montos de un formulario; los que no corresponden al tipo quedan en cero
+function leerMontos(d){const t=d.tipo||'',c=MONTOS_CAMPOS[t]||[],v=k=>c.includes(k)?num(d[MONTO_NOM[k]]):0;const m={fis:v('fis'),ele:v('ele'),hab:v('hab'),one:v('one')};
+ return{tipo:t,currency:d.currency||'CLP',montos:m,primeraFact:/^\d{4}-\d{2}$/.test(String(d.primeraFact||''))?String(d.primeraFact):'',oneTime:m.hab+m.one,monthly:m.fis+m.ele,term:num(d.term)}}
+const tieneMontos=d=>!!d&&(Object.values(MONTO_NOM).some(k=>k in d)||'primeraFact' in d);
+function errMontos(n){const m=n.montos,t=n.tipo;if(!t)return 'Selecciona el tipo de negocio.';
+ if(t==='One Shot'&&!(m.one>0))return 'Ingresa el monto del proyecto (One Shot).';
+ if((t==='Seg. Física'||t==='Seg. Integral')&&!(m.fis>0))return 'Ingresa el monto mensual de Seguridad Física.';
+ if((t==='Seg. Electrónica'||t==='Seg. Integral')&&!(m.ele>0))return 'Ingresa el monto mensual de Seguridad Electrónica.';
+ if(!n.primeraFact)return 'Indica el mes de la primera facturación.';return ''}
+function bookingTexto(o){const m=montosDe(o),t=tipoDe(o),n=mesesBooking(o.primeraFact),c=v=>clp(toCLP(v,o.currency));if(!t)return '';
+ if(t==='One Shot')return 'Monto del proyecto, un solo pago';
+ if(!n)return 'Falta el mes de la primera facturación';
+ const p=[];if(m.hab)p.push('habilitación '+c(m.hab));if(m.fis)p.push('física '+c(m.fis)+' × '+n);if(m.ele)p.push('electrónica '+c(m.ele)+' × '+n);
+ return p.join(' + ')+' ('+MESES[12-n]+' a Dic)'}
 const weighted=o=>tcv(o)*(Number(o.prob)||0)/100;
 const offerNet=of=>of.versions[of.versions.length-1].net;
 const isOpenTask=t=>t.status==='Pendiente'||t.status==='En curso';
@@ -1796,7 +1826,8 @@ function drawerOpp(id){
   <div><span class="muted sm">Código</span><strong>${esc(o.code)}</strong>${oppCRM(o)&&STORE.mode==='servidor'&&STORE.status==='guardando'?' <span class="muted sm">(provisional)</span>':''}</div>
   <div><span class="muted sm">Etapa</span><strong>${esc(stageOf(o.stage)?.name||o.stage)}${STAGE_DESC[o.stage]?' · '+esc(STAGE_DESC[o.stage]):''}</strong></div>
   <div><span class="muted sm">Probabilidad</span><strong>${o.prob}%</strong></div>
-  <div><span class="muted sm">Proyección</span><strong>${clp(tcv(o))}</strong></div>
+  <div><span class="muted sm">Proyección (booking)</span><strong>${clp(tcv(o))}</strong></div>
+  ${!o.fx&&o.primeraFact?(()=>{const m=montosDe(o),c=v=>clp(toCLP(v,o.currency));return [m.fis?['Mensual Seg. Física',c(m.fis)]:null,m.hab?['Cargo de habilitación',c(m.hab)]:null,m.ele?['Mensual Seg. Electrónica',c(m.ele)]:null,m.one?['Monto del proyecto (One Shot)',c(m.one)]:null,['Primera facturación',monthLabel(o.primeraFact)],o.term?['Plazo del contrato',o.term+' meses']:null].filter(Boolean).map(([l,v])=>`<div><span class="muted sm">${l}</span><strong>${esc(v)}</strong></div>`).join('')+`<div class="full"><span class="muted sm">Cálculo del booking</span><strong>${esc(bookingTexto(o))}</strong></div>`})():''}
   <div><span class="muted sm">Tipo de negocio</span><strong>${esc(tipoLabel(o))}</strong></div>
   ${o.fx&&(o.fx.F||o.fx.E)?`<div><span class="muted sm">${o.fx.tipo==='One Shot'?'Monto':'Mensual'} Seg. Física / Electrónica</span><strong>${clp(o.fx.F||0)} / ${clp(o.fx.E||0)}</strong></div>`:''}
   ${o.fx&&o.fx.Hb?`<div><span class="muted sm">Cargo de habilitación</span><strong>${clp(o.fx.Hb)}${o.fx.cuotas?' en '+esc(o.fx.cuotas)+' cuota'+(o.fx.cuotas==='1'?'':'s'):''}</strong></div>`:''}
@@ -2316,21 +2347,32 @@ function nuevaOpp(d,base){
  const o=Object.assign({id:uid('o'),code:provisionalOP(),crm:true,name:String(d.name||'').trim(),companyId:'',siteId:'',ownerId:S.currentUser,stage:d.stage||'oferta',prob:stageOf(d.stage||'oferta').p,tipo:d.tipo||'',currency:d.currency||'CLP',oneTime:num(d.oneTime),monthly:num(d.monthly),term:num(d.term),closeDate:d.closeDate,nextAction:String(d.nextAction||'').trim(),nextActionDate:d.nextActionDate,stageEnteredAt:todayIso,createdAt:todayIso,status:'abierta',contactIds:[],need:'',pain:'',competitors:'',currentProvider:'',strategy:'',risks:'',probReason:'',history:[],services:[]},base);
  if(!o.companyId)return 'Selecciona la empresa.';
  if(!o.name)return 'Falta el nombre de la oportunidad.';
+ if(tieneMontos(d)){Object.assign(o,leerMontos(d));const e=errMontos(o);if(e)return e}
  if(!o.tipo)return 'Selecciona el tipo de negocio.';
  if(!(tcv(o)>0))return 'Ingresa al menos un monto: único, o mensual con plazo en meses.';
  if(!o.closeDate)return 'Falta la fecha estimada de cierre.';
  if(o.closeDate<todayIso)return 'La fecha de cierre no puede estar en el pasado.';
  return o}
+const tipoOpts=sel=>{const o=(v,l)=>`<option value="${v}" ${v===sel?'selected':''}>${l}</option>`;
+ return `<option value="">Selecciona el tipo</option>${o('Seg. Física','Seguridad Física (mensual)')}<optgroup label="Seguridad Electrónica">${o('Seg. Electrónica','Habilitación + mensualidades')}${o('One Shot','One Shot (un solo monto)')}</optgroup>${o('Seg. Integral','Seguridad Integral (física + electrónica)')}`};
+function montosForm(o){o=o||{};const m=o.tipo||o.montos||o.oneTime||o.monthly?montosDe(o):{fis:0,ele:0,hab:0,one:0},t=tipoDe(o),c=MONTOS_CAMPOS[t]||[];
+ const f=(k,l,h)=>`<label class="f" data-m="${k}" ${c.includes(k)?'':'hidden'}>${l}<input type="number" min="0" step="any" name="${MONTO_NOM[k]}" value="${esc(m[k]||0)}" data-montos>${h?`<span class="hint">${h}</span>`:''}</label>`;
+ return `<label class="f">Tipo de negocio<select name="tipo" required data-montos>${tipoOpts(t)}</select><span class="hint">Define los montos, los plazos de seguimiento y la línea de la meta.</span></label>
+  <label class="f">Moneda<select name="currency" data-montos>${opt(['CLP','UF','USD'],o.currency||'CLP')}</select></label>
+  ${f('fis','Mensual Seguridad Física')}${f('hab','Cargo de habilitación','Parte electrónica, se cobra al inicio.')}${f('ele','Mensual Seguridad Electrónica')}${f('one','Monto del proyecto','One Shot: un solo monto.')}
+  <label class="f">Primera facturación<input type="month" name="primeraFact" required value="${esc(o.primeraFact||'')}" data-montos><span class="hint">Las mensualidades suman desde este mes, incluido, hasta diciembre.</span></label>
+  <label class="f">Plazo del contrato (meses)<input type="number" min="0" name="term" value="${esc(o.term||0)}"><span class="hint">Informativo: no entra al booking.</span></label>
+  <div class="tcv full"><span>Booking<br><span class="muted sm" data-bk-det>${esc(bookingTexto(o))}</span></span><strong data-bk>${clp(t?toCLP(bookingDe(o),o.currency):0)}</strong></div>`}
+function updMontos(f){if(!f)return;const d=Object.fromEntries(new FormData(f));const n=leerMontos(d),c=MONTOS_CAMPOS[n.tipo]||[];
+ f.querySelectorAll('[data-m]').forEach(el=>{el.hidden=!c.includes(el.dataset.m)});
+ const o=Object.assign({},n);const bk=f.querySelector('[data-bk]'),dt=f.querySelector('[data-bk-det]');
+ if(bk)bk.textContent=clp(n.tipo==='One Shot'||n.primeraFact?toCLP(bookingDe(o),n.currency):0);if(dt)dt.textContent=bookingTexto(o)}
 function oppEditForm(o){
  return `<h1 style="font-size:20px">Editar ${esc(o.code)}</h1><p class="sub sm">Cada cambio queda en la auditoría con tu nombre.</p><form data-form="oppEdit" data-id="${o.id}" style="margin-top:12px"><div class="fgrid">
   <label class="f full">Nombre de la oportunidad<input name="name" required value="${esc(o.name)}"></label>
   ${o.status==='abierta'?`<label class="f">Etapa<select name="stage">${opt(FUNNEL_STAGES.filter(s=>!LEGACY_STAGES.includes(s.id)).map(s=>[s.id,s.name+(STAGE_DESC[s.id]?' · '+STAGE_DESC[s.id]:'')]),o.stage)}</select></label>`:''}
   <label class="f">Probabilidad (%)<input type="number" min="0" max="100" name="prob" value="${esc(o.prob)}"></label>
-  <label class="f">Tipo de negocio<select name="tipo">${opt(TIPOS_NEGOCIO,tipoDe(o),'Sin tipo')}</select></label>
-  <label class="f">Moneda<select name="currency">${opt(['CLP','UF','USD'],o.currency||'CLP')}</select></label>
-  <label class="f">Monto único<input type="number" min="0" step="any" name="oneTime" value="${esc(o.oneTime||0)}"></label>
-  <label class="f">Monto mensual<input type="number" min="0" step="any" name="monthly" value="${esc(o.monthly||0)}"></label>
-  <label class="f">Plazo (meses)<input type="number" min="0" name="term" value="${esc(o.term||0)}"></label>
+  ${montosForm(o)}
   <label class="f">Fecha estimada de cierre<input type="date" name="closeDate" required value="${esc(o.closeDate||'')}"></label>
   <label class="f">Responsable<select name="ownerId">${userOpts(o.ownerId)}</select></label>
  </div><p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Guardar cambios</button></div></form>`}
@@ -2340,11 +2382,7 @@ function oppNewForm(company,lead){
   <label class="f full">Nombre de la oportunidad<input name="name" required placeholder="Servicio y sitio, por ejemplo: CCTV Parque FV Taltal"></label>
   <label class="f">Código<input value="${provisionalOP()}" disabled><span class="hint">Automático: fecha de creación y correlativo del día. El servidor lo confirma al guardar.</span></label>
   <label class="f">Etapa<select name="stage">${opt(FUNNEL_STAGES.filter(s=>s.id!=='adjudicada').map(s=>[s.id,s.name+' · '+STAGE_DESC[s.id]]),'oferta')}</select></label>
-  <label class="f">Tipo de negocio<select name="tipo" required>${opt(TIPOS_NEGOCIO,'','Selecciona el tipo')}</select><span class="hint">Define los plazos de seguimiento y la línea de la meta.</span></label>
-  <label class="f">Moneda<select name="currency">${opt(['CLP','UF','USD'],'CLP')}</select></label>
-  <label class="f">Monto único<input type="number" min="0" step="any" name="oneTime" value="0"></label>
-  <label class="f">Monto mensual<input type="number" min="0" step="any" name="monthly" value="0"></label>
-  <label class="f">Plazo (meses)<input type="number" min="0" name="term" value="0"></label>
+  ${montosForm()}
   <label class="f">Fecha estimada de cierre<input type="date" name="closeDate" required></label>
   <label class="f">Próxima acción<input name="nextAction" required></label>
   <label class="f">Fecha próxima acción<input type="date" name="nextActionDate" value="${todayIso}" required></label>
@@ -2401,11 +2439,7 @@ const ACTIONS={
   <label class="f full">Nombre de la oportunidad<input name="name" required value="${esc(l.name||l.service||'')}" placeholder="Servicio y sitio, por ejemplo: CCTV Parque FV Taltal"></label>
   <label class="f">Código<input value="${provisionalOP()}" disabled><span class="hint">Automático; el servidor lo confirma al guardar.</span></label>
   <label class="f">Etapa<select name="stage">${opt(FUNNEL_STAGES.filter(s=>s.id!=='adjudicada').map(s=>[s.id,s.name+' · '+STAGE_DESC[s.id]]),'oferta')}</select></label>
-  <label class="f">Tipo de negocio<select name="tipo" required>${opt(TIPOS_NEGOCIO,'','Selecciona el tipo')}</select><span class="hint">Define los plazos de seguimiento y la línea de la meta.</span></label>
-  <label class="f">Moneda<select name="currency">${opt(['CLP','UF','USD'],'CLP')}</select></label>
-  <label class="f">Monto único<input type="number" min="0" step="any" name="oneTime" value="0"></label>
-  <label class="f">Monto mensual<input type="number" min="0" step="any" name="monthly" value="0"></label>
-  <label class="f">Plazo (meses)<input type="number" min="0" name="term" value="0"></label>
+  ${montosForm()}
   <label class="f">Fecha estimada de cierre<input type="date" name="closeDate" required></label>
   <label class="f">Próxima acción<input name="nextAction" required value="${esc(l.nextAction||'')}"></label>
   <label class="f">Fecha próxima acción<input type="date" name="nextActionDate" value="${esc(l.nextActionDate&&l.nextActionDate>=todayIso?l.nextActionDate:todayIso)}" required></label>
@@ -2677,18 +2711,19 @@ function doExport(what){
 
 /* ============ FUNNEL EN FORMATO GERENCIA (Fase 1, punto 5) ============
    Las columnas son las de la lista «Funnel de Ventas» de SharePoint, con los nombres que lee el importador antiguo
-   (fxRows) y el orden de sus exportaciones (Generador en la columna K). El título lleva el código y el cliente como
+   (fxRows) y el orden de la exportación real de SharePoint (26 columnas, Generador en la columna K). El título lleva el código y el cliente como
    en el funnel: «OP-261126-01-CLIENTE (nombre)». Sale lo que la persona ve, según el alcance elegido: el servidor
    nunca manda lo de otros, así que el archivo de un ejecutivo trae solo su cartera. Las postergadas no van (el
    funnel no tiene ese estado). */
-const FG_COLS=['Estado','Título','Fecha de Contacto','Tipo de negocio','Monto Seg. Física','Monto Seg. Electrónica','Cargo Habilitación','Cuotas Carg. Habilitación','Mg %','Probabilidad','Generador','Fecha Presentación','Fecha de Adjudicación','Proyección','Motivo No Adj.','Costo del Proyecto','Primera Facturación','Año','Fecha Última Conversación','Tomador de Decisión','Usuario Final','Notas','Código Oportunidad','ID'];
-const FG_FMT={'Fecha de Contacto':'f','Fecha Presentación':'f','Fecha de Adjudicación':'f','Fecha Última Conversación':'f','Monto Seg. Física':'n','Monto Seg. Electrónica':'n','Cargo Habilitación':'n','Proyección':'n','Costo del Proyecto':'n','Probabilidad':'p','Mg %':'p'};
+const FG_COLS=['Estado','Título','Fecha de Contacto','Tipo de negocio','Monto Seg. Física','Monto Seg. Electrónica','Cargo Habilitación','Cuotas Carg. Habilitación','Mg %','Probabilidad','Generador','Usuario Final','Tomador de Decisión','Notas','Costo del Proyecto','Año','Fecha Presentación','Fecha de Adjudicación','Fecha Ultima Conversación','Primera Facturación','Proyección','Link','Código Oportunidad','Motivo No Adj.','Tipo de elemento','Ruta de acceso'];
+const FG_FMT={'Fecha de Contacto':'f','Fecha Presentación':'f','Fecha de Adjudicación':'f','Fecha Ultima Conversación':'f','Monto Seg. Física':'n','Monto Seg. Electrónica':'n','Cargo Habilitación':'n','Proyección':'n','Costo del Proyecto':'n','Probabilidad':'p','Mg %':'p'};
 const fgIncluye=o=>enFunnel(o)&&o.status!=='postergada'&&!PROSP_STAGES.includes(o.stage);
 function fgEstado(o){if(o.status==='ganada')return 'Booking';if(o.status==='perdida')return o.fx&&FX_LOST[o.fx.estado]?o.fx.estado:'No Adjudicado';return stageOf(o.stage)?.name||''}
 // Montos como en el funnel: en One Shot, Física/Electrónica son el monto del proyecto; en los servicios, el mensual, y el
 // monto único va en «Cargo Habilitación». One Shot es la línea SSEE One Shot (electrónica). En Seguridad Integral el CRM no
 // separa la parte física de la electrónica: lo mensual va en Física. Si vino del funnel y no se cambió, se respeta su reparto.
 function fgMontos(o){const c=v=>Math.round(toCLP(v,o.currency)),one=c(o.oneTime),mon=c(o.monthly),fx=o.fx;
+ if(o.montos){const m=montosDe(o);return{F:c(m.fis),E:c(m.ele+m.one),Hb:c(m.hab)}}
  if(fx&&fx.oneTime===o.oneTime&&fx.monthly===o.monthly&&(o.currency||'CLP')==='CLP')return{F:fx.F||0,E:fx.E||0,Hb:fx.Hb||0};
  const t=tipoDe(o);if(t==='One Shot')return{F:0,E:one+mon*(Number(o.term)||0),Hb:0};
  if(t==='Seg. Electrónica')return{F:0,E:mon,Hb:one};
@@ -2697,11 +2732,11 @@ function fgFila(o){const c=byId(S.companies,o.companyId)||{},fx=o.fx||{},m=fgMon
  const kn=r=>{const k=ks.find(k=>k.decisionRole===r);return k?(k.firstName+' '+k.lastName).trim():''};
  const comp=String(c.tradeName||c.legalName||'').toUpperCase().replace(/[()]/g,'').trim();
  const pres=fx.pres||((o.history||[]).find(h=>h.to==='seguimiento')||{}).date||(o.stage==='seguimiento'?o.stageEnteredAt:'')||'';
- return{'Estado':fgEstado(o),'Título':`${o.code}-${comp} (${o.name})`,'Fecha de Contacto':o.createdAt||'','Tipo de negocio':tipoDe(o),'Monto Seg. Física':m.F,'Monto Seg. Electrónica':m.E,'Cargo Habilitación':m.Hb,
-  'Cuotas Carg. Habilitación':fx.cuotas||'','Mg %':fx.mg===''||fx.mg==null?'':Number(fx.mg)/100,'Probabilidad':(Number(o.prob)||0)/100,'Generador':uname(o.ownerId),'Fecha Presentación':pres,
+ return{'Estado':fgEstado(o),'Título':`${o.code}-${comp} (${String(o.name||'').toUpperCase()})`,'Fecha de Contacto':o.createdAt||'','Tipo de negocio':tipoDe(o),'Monto Seg. Física':m.F,'Monto Seg. Electrónica':m.E,'Cargo Habilitación':m.Hb,
+  'Cuotas Carg. Habilitación':o.montos?(m.Hb?1:''):fx.cuotas||'','Mg %':fx.mg===''||fx.mg==null?'':Number(fx.mg)/100,'Probabilidad':(Number(o.prob)||0)/100,'Generador':uname(o.ownerId),'Fecha Presentación':pres,
   'Fecha de Adjudicación':o.status==='ganada'?(o.wonAt||''):'','Proyección':Math.round(tcv(o)),'Motivo No Adj.':o.status==='perdida'?(o.lossReason||''):'','Costo del Proyecto':fx.cost||'',
-  'Primera Facturación':fx.fact||'','Año':fx.ano||'','Fecha Última Conversación':lastActOpp(o)||'','Tomador de Decisión':kn('Decisor')||fx.td||'','Usuario Final':kn('Usuario')||fx.uf||'',
-  'Notas':fx.notes||'','Código Oportunidad':o.code||'','ID':fx.id||''}}
+  'Primera Facturación':o.primeraFact?Number(o.primeraFact.slice(5,7)):fx.fact||'','Año':o.primeraFact?o.primeraFact.slice(0,4):fx.ano||'','Fecha Ultima Conversación':lastActOpp(o)||'','Tomador de Decisión':kn('Decisor')||fx.td||'','Usuario Final':kn('Usuario')||fx.uf||'',
+  'Notas':fx.notes||'','Link':'','Código Oportunidad':o.code||'','Tipo de elemento':'Elemento','Ruta de acceso':''}}
 const fgFilas=()=>mine(S.opps).filter(fgIncluye).sort((a,b)=>String(a.code||'').localeCompare(String(b.code||''))).map(fgFila);
 // .xlsx sin librerías: zip sin compresión con las partes mínimas de un libro de Excel
 const CRC_T=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
@@ -2740,13 +2775,13 @@ let LAST_FG=null;
 function exportFunnel(){
  const rows=fgFilas();if(!rows.length)return toast('No hay oportunidades del funnel para exportar en este alcance.');
  const post=mine(S.opps).filter(o=>enFunnel(o)&&o.status==='postergada').length;
- const integ=rows.filter(r=>r['Tipo de negocio']==='Seg. Integral').length;
+ const integ=mine(S.opps).filter(o=>fgIncluye(o)&&tipoDe(o)==='Seg. Integral'&&!o.montos&&!(o.fx&&o.fx.oneTime===o.oneTime)).length;
  const txt=(h,v)=>v===''||v==null?'':FG_FMT[h]==='f'?(xlsSerial(v)!=null?v.slice(8,10)+'-'+v.slice(5,7)+'-'+v.slice(0,4):''):FG_FMT[h]==='p'&&typeof v==='number'?Math.round(v*1000)/10+'%':String(v).replace(/[\t\n]/g,' ');
  const tsv=[FG_COLS.join('\t'),...rows.map(r=>FG_COLS.map(h=>txt(h,r[h])).join('\t'))].join('\n');
  const al=alcanceLabel(),slug=fxNorm(al).replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
  LAST_FG={name:`funnel-gerencia-${slug||'cartera'}-${todayIso}.xlsx`,rows};
  audit('Exportación','Funnel formato Gerencia','',rows.length+' oportunidades · '+al);save();
- openModal(`<h1 style="font-size:20px">Exportar funnel (formato Gerencia)</h1><p class="sub sm">${rows.length} oportunidades de ${esc(al)}, con las columnas de la lista «Funnel de Ventas»: estado, título con código OP y cliente, tipo de negocio, montos en CLP, probabilidad, generador y fechas.${post?` ${post} postergada${post>1?'s':''} no va${post>1?'n':''}: el funnel no tiene ese estado.`:''}${integ?` En ${integ} de Seguridad Integral el monto mensual va completo en «Monto Seg. Física» (el CRM no separa la parte electrónica).`:''}</p><textarea id="exportTa" readonly style="width:100%;height:180px;margin-top:10px;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--surface-2);color:var(--ink)">${esc(tsv)}</textarea><div class="form-foot"><button class="btn" data-action="closeModal">Cerrar</button><button class="btn" data-action="copyExport">Copiar para Excel</button><button class="btn pri" data-action="dlFunnel">Descargar Excel</button></div>`)}
+ openModal(`<h1 style="font-size:20px">Exportar funnel (formato Gerencia)</h1><p class="sub sm">${rows.length} oportunidades de ${esc(al)}, con las columnas de la lista «Funnel de Ventas»: estado, título con código OP y cliente, tipo de negocio, montos en CLP, probabilidad, generador y fechas.${post?` ${post} postergada${post>1?'s':''} no va${post>1?'n':''}: el funnel no tiene ese estado.`:''}${integ?` En ${integ} de Seguridad Integral sin montos separados (creadas antes), el mensual va completo en «Monto Seg. Física».`:''}</p><textarea id="exportTa" readonly style="width:100%;height:180px;margin-top:10px;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--surface-2);color:var(--ink)">${esc(tsv)}</textarea><div class="form-foot"><button class="btn" data-action="closeModal">Cerrar</button><button class="btn" data-action="copyExport">Copiar para Excel</button><button class="btn pri" data-action="dlFunnel">Descargar Excel</button></div>`)}
 async function dlFunnel(){if(!LAST_FG)return;const r=await fileSave(LAST_FG.name,fgXlsx(LAST_FG.rows));
  if(r==='ok')toast('Excel descargado.');else if(r==='declined')toast('Descarga cancelada.');else if(r==='busy')toast('Ya hay una descarga esperando tu confirmación.');else toast('La descarga no está disponible en esta vista. Usa «Copiar para Excel».')}
 
@@ -2848,12 +2883,15 @@ const SUBMITS={
  newOpp:(d,f)=>{const o=nuevaOpp(d,{companyId:d.companyId,ownerId:d.ownerId});if(typeof o==='string')return setErr(f,o);
   S.opps.push(o);markTargetOpp(o.companyId);audit(o.code,'Creación','',o.name);save();closeModal();render();openEntity('opp',o.id);toast(`Oportunidad ${esc(o.code)} creada.`)},
  oppEdit:(d,f)=>{const o=byId(S.opps,f.dataset.id);if(!oppCRM(o))return closeModal();
-  const n={name:String(d.name||'').trim(),tipo:d.tipo||'',currency:d.currency,oneTime:num(d.oneTime),monthly:num(d.monthly),term:num(d.term),prob:Math.min(100,Math.max(0,num(d.prob))),closeDate:d.closeDate,ownerId:d.ownerId||o.ownerId};
+  const n=Object.assign({name:String(d.name||'').trim()},tieneMontos(d)?leerMontos(d):{tipo:d.tipo||'',currency:d.currency,oneTime:num(d.oneTime),monthly:num(d.monthly),term:num(d.term)},{prob:Math.min(100,Math.max(0,num(d.prob))),closeDate:d.closeDate,ownerId:d.ownerId||o.ownerId});
   if(!n.name)return setErr(f,'Falta el nombre de la oportunidad.');
+  if(n.montos){const e=errMontos(n);if(e)return setErr(f,e)}
   if(!(tcv(Object.assign({},o,n))>0))return setErr(f,'Ingresa al menos un monto: único, o mensual con plazo en meses.');
   if(!n.closeDate)return setErr(f,'Falta la fecha estimada de cierre.');
-  const L={name:'Nombre',tipo:'Tipo de negocio',currency:'Moneda',oneTime:'Monto único',monthly:'Monto mensual',term:'Plazo',prob:'Probabilidad',closeDate:'Cierre estimado',ownerId:'Responsable'};
-  Object.keys(n).forEach(k=>{if(String(o[k]??'')!==String(n[k])){audit(o.code,L[k],k==='ownerId'?uname(o[k]):o[k],k==='ownerId'?uname(n[k]):n[k]);o[k]=n[k]}});
+  const L={name:'Nombre',tipo:'Tipo de negocio',currency:'Moneda',montos:'Montos',primeraFact:'Primera facturación',oneTime:'Monto único',monthly:'Monto mensual',term:'Plazo del contrato',prob:'Probabilidad',closeDate:'Cierre estimado',ownerId:'Responsable'};
+  const txt=(k,v)=>k==='ownerId'?uname(v):k==='montos'?(v?Object.entries(v).filter(([,x])=>x).map(([a,x])=>({fis:'física',ele:'electrónica',hab:'habilitación',one:'proyecto'})[a]+' '+x).join(', '):''):v;
+  const igual=(a,b)=>typeof b==='object'&&b?JSON.stringify(a||null)===JSON.stringify(b):String(a??'')===String(b);
+  Object.keys(n).forEach(k=>{if(!igual(o[k],n[k])){if(k!=='oneTime'&&k!=='monthly'||!n.montos)audit(o.code,L[k],txt(k,o[k]),txt(k,n[k]));o[k]=n[k]}});
   if(d.stage&&d.stage!==o.stage&&o.status==='abierta'){if(d.stage==='adjudicada'){save();closeModal();render();return openWon(o.id)}setStage(o,d.stage);o.prob=Math.min(100,Math.max(0,num(d.prob)))||stageOf(d.stage).p}
   save();closeModal();render();openEntity('opp',o.id);toast('Oportunidad actualizada.')},
  recepcion:(d,f)=>{const o=byId(S.opps,f.dataset.opp);if(!o){closeModal();return}
@@ -3259,8 +3297,9 @@ document.addEventListener('change',e=>{const t=e.target;
  if(t.name==='companyId'&&t.form&&t.form.dataset.form==='contact'){const ss=t.form.querySelector('[name=siteId]');if(ss)ss.innerHTML=contactSiteOpts(t.value,'');return}
  if(t.name==='siteId'&&t.form&&t.form.dataset.form==='contact'){const w=t.form.querySelector('[data-newsite]');if(w)w.hidden=t.value!=='__nueva';return}
  if(t.hasAttribute('data-tcv'))updTcv(t.form);
+ if(t.hasAttribute('data-montos'))updMontos(t.form);
 });
-document.addEventListener('input',e=>{const t=e.target;if(t.id==='gsearch')gsearch(t.value);if(t.hasAttribute&&t.hasAttribute('data-tcv'))updTcv(t.form);if(t.dataset&&t.dataset.inv)updInv(t)});
+document.addEventListener('input',e=>{const t=e.target;if(t.id==='gsearch')gsearch(t.value);if(t.hasAttribute&&t.hasAttribute('data-tcv'))updTcv(t.form);if(t.hasAttribute&&t.hasAttribute('data-montos'))updMontos(t.form);if(t.dataset&&t.dataset.inv)updInv(t)});
 function updTcv(f){const g=n=>f.querySelector(`[name=${n}]`).value;const v=toCLP(num(g('oneTime'))+num(g('monthly'))*num(g('term')),g('currency'));const el=$('#tcvLive');if(el)el.textContent=clp(v)}
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){if($('#modalLayer').innerHTML)closeModal();else if($('#drawerLayer').innerHTML)closeDrawer();else closeGSearch()}if(e.key==='Enter'&&e.target.classList&&e.target.classList.contains('card')){openEntity('opp',e.target.dataset.id)}});
 document.addEventListener('click',e=>{if(!e.target.closest('.search'))$('#gresults').hidden=true});

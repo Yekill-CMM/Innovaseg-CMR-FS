@@ -37,11 +37,19 @@ En Reportes → Oportunidades, la tabla «Metas por persona y equipo» muestra l
 
 Para mostrarlo: entra como Marcela Ibarra, abre Reportes, cambia el selector a «Subgerencia Sur» y después a «Paula Cifuentes». Luego entra como Rodrigo Valdés: el selector solo ofrece el Norte.
 
+## Montos por tipo de negocio
+
+Al crear o editar una oportunidad, los montos dependen del tipo de negocio, igual que en el funnel de Gerencia:
+
+- **Seguridad Física:** solo el mensual.
+- **Seguridad Electrónica:** cargo de habilitación más mensualidades, o One Shot con un solo monto.
+- **Seguridad Integral:** el mensual físico y la parte electrónica (habilitación más mensual) por separado.
+
+Se indica además el mes de la primera facturación. El booking («Proyección») es la habilitación más los mensuales desde ese mes, incluido, hasta diciembre; en One Shot, el monto del proyecto. El plazo del contrato queda como dato informativo. El booking cuenta en el año en que se cierra la oportunidad; para la meta cuenta lo facturado en el año. El formulario muestra el cálculo mientras se escribe.
+
 ## Exportar el funnel en el formato de Gerencia
 
-En Oportunidades (y en Reportes) el botón «Exportar funnel (formato Gerencia)» descarga un Excel con las columnas de la lista «Funnel de Ventas»: Estado, Título (`OP-AAMMDD-NN-CLIENTE (nombre)`), Fecha de Contacto, Tipo de negocio, montos de Seguridad Física y Electrónica, Cargo Habilitación, Probabilidad, Generador (columna K), fechas de presentación y adjudicación, Proyección, Motivo No Adj., decisor y usuario final, entre otras. Los montos van en CLP. Sale lo que la persona ve con el alcance elegido: Paula exporta sus 3 oportunidades, Rodrigo las 12 del Norte y Marcela las 21. Las postergadas y las que siguen en prospección no van, porque el funnel no tiene esos estados.
-
-En Seguridad Integral el CRM no separa la parte física de la electrónica: el monto mensual completo va en «Monto Seg. Física».
+En Oportunidades (y en Reportes) el botón «Exportar funnel (formato Gerencia)» descarga un Excel con las 26 columnas de la lista «Funnel de Ventas», en el orden de la exportación de SharePoint: Estado, Título (`OP-AAMMDD-NN-CLIENTE (NOMBRE)`), Fecha de Contacto, Tipo de negocio, Monto Seg. Física, Monto Seg. Electrónica, Cargo Habilitación, Probabilidad, Generador (columna K), Primera Facturación, Año, Proyección y el resto. Los montos van en CLP. Sale lo que la persona ve con el alcance elegido: Paula exporta sus 3 oportunidades, Rodrigo las 12 del Norte y Marcela las 21. Las postergadas y las que siguen en prospección no van, porque el funnel no tiene esos estados.
 
 ## Lo que la demo todavía no muestra
 

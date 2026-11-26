@@ -123,6 +123,17 @@ function demoDatos($hoy = null) {
             'need' => '', 'pain' => '', 'strategy' => '', 'risks' => '', 'probReason' => '', 'history' => [], 'siteId' => '', 'services' => [], 'nextAction' => '', 'nextActionDate' => ''];
         $o = array_merge($base, $o, ['code' => $op($creada), 'createdAt' => $f($creada), 'createdBy' => $o['ownerId'], 'updatedBy' => $o['ownerId']]);
         foreach (['closeDate', 'nextActionDate', 'stageEnteredAt', 'wonAt', 'lostAt'] as $k) if (isset($o[$k]) && is_int($o[$k])) $o[$k] = $f($o[$k]);
+        // Montos por tipo de negocio, como se ingresan en el CRM: física mensual, electrónica con habilitación + mensual,
+        // One Shot un solo monto e Integral con las dos partes separadas. La primera facturación, el mes siguiente al cierre.
+        $mon = (int) $o['monthly']; $uno = (int) $o['oneTime'];
+        if ($o['tipo'] === 'Seg. Electrónica' && $mon === 0) $o['tipo'] = 'One Shot';   // electrónica de un solo monto
+        if ($o['tipo'] === 'One Shot') $m = ['fis' => 0, 'ele' => 0, 'hab' => 0, 'one' => $uno + $mon * (int) $o['term']];
+        elseif ($o['tipo'] === 'Seg. Electrónica') $m = ['fis' => 0, 'ele' => $mon, 'hab' => $uno, 'one' => 0];
+        elseif ($o['tipo'] === 'Seg. Integral') { $fis = (int) (round($mon * 0.7 / 100000) * 100000); $m = ['fis' => $fis, 'ele' => $mon - $fis, 'hab' => $uno, 'one' => 0]; }
+        else $m = ['fis' => $mon, 'ele' => 0, 'hab' => $uno, 'one' => 0];
+        $o['montos'] = $m; $o['oneTime'] = $m['hab'] + $m['one']; $o['monthly'] = $m['fis'] + $m['ele'];
+        $cierre = $o['status'] === 'ganada' && !empty($o['wonAt']) ? $o['wonAt'] : $o['closeDate'];
+        $o['primeraFact'] = date('Y-m', strtotime(substr($cierre, 0, 7) . '-01 +1 month'));
         $d['opps'][] = $o; return $o['code'];
     };
     $P = ['identificada' => 10, 'calificada' => 20, 'levantamiento' => 30, 'oferta' => 50, 'seguimiento' => 60, 'negociacion' => 80, 'adjudicada' => 100];
