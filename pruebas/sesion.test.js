@@ -4,6 +4,10 @@
 const fs=require('fs');const {JSDOM,VirtualConsole}=require('jsdom');
 const HTML=fs.readFileSync(process.argv[2],'utf8');let f=0;const ok=(c,m)=>{console.log((c?'  ✓ ':'  ✗ ')+m);if(!c)f++};
 const KEY='fs-crm-proto-v1';const espera=ms=>new Promise(r=>setTimeout(r,ms));
+// Lo que hace el servidor con un guardado registro por registro, sin conflictos (las reglas reales: guardado.test.php)
+const aplicarCambios=(d,c)=>{for(const r of c.registros||[]){if(!Array.isArray(d[r.t]))d[r.t]=[];const L=d[r.t];const i=L.findIndex(x=>String(x.id)===String(r.id));
+ if(r.despues===null){if(i>=0)L.splice(i,1);continue}if(i>=0){L[i]=r.despues;continue}const j=r.tras==null?-1:L.findIndex(x=>String(x.id)===String(r.tras));
+ if(r.tras==null)L.unshift(r.despues);else if(j>=0)L.splice(j+1,0,r.despues);else L.push(r.despues)}for(const x of c.doc||[])d[x.k]=x.despues;return d};
 const USUARIOS=[
  {id:'g1',name:'Marcela Ibarra',role:'gerente',roleLabel:'Gerente comercial',equipo:'',admin:false,activo:true},
  {id:'sN',name:'Rodrigo Valdés',role:'subgerente',roleLabel:'Subgerente comercial',equipo:'Norte',admin:false,activo:true},
@@ -33,7 +37,7 @@ function abrir({sesion=null,data,local,localUsuario,pend,pasos=[],avisos=null}){
    else if(m==='GET'&&/accion=usuarios/.test(q))j={usuarios:USUARIOS.map(u=>Object.assign({usuario:u.id+'@prueba.cl',segundoFactor:true,claveTemporal:u.id==='eS1',bloqueada:false,ultimoIngreso:null},u))};
    else if(m==='GET')st=404,j={};
    else if(m==='POST'&&!/accion=/.test(q)){const b=JSON.parse(o.body);srv.posts.push(b);srv.rev++;
-    if(srv.avisos){j={rev:srv.rev,avisos:srv.avisos,data:vista()};srv.avisos=null}else{srv.data=b.data;j={rev:srv.rev}}}
+    if(srv.avisos){j={rev:srv.rev,avisos:srv.avisos,data:vista()};srv.avisos=null}else if(b.cambios){aplicarCambios(srv.data,b.cambios);j={rev:srv.rev,registros:[],doc:{}}}else{srv.data=b.data;j={rev:srv.rev,data:vista()}}}
    else j={ok:true};
    return{status:st,json:async()=>JSON.parse(JSON.stringify(j))}};
  }});
@@ -98,7 +102,7 @@ const enviar=async(t,form,valores)=>{const fm=t.w.document.querySelector(`form[d
  t=abrir({sesion:'sN',data:B});await espera(800);
  ok(t.E('asignables().map(u=>u.id).sort().join()')==='eN1,eN2,sN'&&t.E('seesAll()')&&!t.E('esAdmin()'),'el subgerente asigna a su equipo y ve la vista del equipo, sin administrar');
  t=abrir({sesion:'g1',data:B});await espera(800);t.E(`location.hash='config';render()`);
- ok(t.E('asignables().length')===6&&!!t.w.document.querySelector('form[data-form="config"] fieldset[disabled]')&&!!t.w.document.querySelector('[data-funnel]'),'el gerente asigna a cualquiera e importa el funnel, con la configuración en solo lectura');
+ ok(t.E('asignables().length')===6&&!!t.w.document.querySelector('form[data-form="config"] fieldset[disabled]')&&!t.w.document.querySelector('[data-funnel]'),'el gerente asigna a cualquiera, con la configuración en solo lectura (y sin importar funnel: nada entra por Excel)');
  t=abrir({sesion:'ad',data:B});await espera(800);t.E(`location.hash='config';render()`);await espera(500);
  const txt=t.w.document.querySelector('#main').textContent;
  ok(/Usuarios y equipos/.test(txt)&&/Javier Núñez/.test(txt)&&/Clave temporal/.test(txt)&&!t.w.document.querySelector('form[data-form="config"] fieldset[disabled]'),'el administrador ve las cuentas con su estado y cambia la configuración');

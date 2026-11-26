@@ -78,14 +78,13 @@ enviar('form[data-form="quick"]', { type: 'Reunión', date: E('todayIso'), desc:
 ok(E(`byId(S.leads,'l2').stage`) === 'Calificación', 'no retrocede a un prospecto que ya estaba más adelante');
 
 console.log('6. Pasar a oferta y vincular con la oportunidad del Excel: hereda el historial de prospección');
-E(`ACTIONS.convertLead({id:'${idN}'})`);
-enviar('form[data-form="convert"]', { note: 'Oferta de monitoreo' });
-ok(E(`byId(S.leads,'${idN}').stage`) === 'Oportunidad creada' && !E(`S.opps.some(o=>o.code==='CM-261112-09')`), 'pasa a oferta sin crear la oportunidad');
 w.__c = ['ID;Estado;Título;Tipo de negocio;Monto Seg. Fisica;Monto Seg. Electronica;Probabilidad;Fecha de contacto;Generador',
   '901;Pipeline;CM-261112-09-ACME (Monitoreo subestación Norte);Seg. Electrónica;0;2500000;30%;' + E('todayIso') + ';Claudio Méndez'].join('\n');
 E(`FX_PLAN=fxBuildPlan(fxRows(fxReadCsv(window.__c)).filter(r=>fxIsOwner(r.ej)));fxApply()`);
-E(`ACTIONS.linkLead({id:'${idN}'})`);
-enviar('form[data-form="linkLead"]', { oppId: E(`S.opps.find(o=>o.code==='CM-261112-09').id`) });
+const nOpp = E('S.opps.length');
+E(`ACTIONS.convertLead({id:'${idN}'})`);
+enviar('form[data-form="convert"]', { note: 'Oferta de monitoreo', oppId: E(`S.opps.find(o=>o.code==='CM-261112-09').id`) });
+ok(E(`byId(S.leads,'${idN}').stage`) === 'Oportunidad creada' && E('S.opps.length') === nOpp, 'pasa a oferta vinculándose con la del Excel, sin crear otra');
 const o = lead(`S.opps.find(o=>o.code==='CM-261112-09')`);
 ok(o && o.leadId === idN, 'la oportunidad CM-261112-09 del Excel queda ligada al prospecto');
 E(`openEntity('opp',S.opps.find(o=>o.code==='CM-261112-09').id)`);

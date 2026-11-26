@@ -11,7 +11,7 @@ $por = function ($l, $id) { foreach ((array) $l as $x) if ($x->id === $id) retur
 
 $T = sys_get_temp_dir() . '/crm-cuentas-' . getmypid();
 @mkdir("$T/app/datos", 0777, true); @mkdir("$T/local", 0777, true);
-foreach (['index.html', 'api.php', 'almacen.php', 'cuentas.php', 'permisos.php'] as $f) copy("$APP/$f", "$T/app/$f");
+foreach (['index.html', 'api.php', 'almacen.php', 'cuentas.php', 'permisos.php', 'guardado.php'] as $f) copy("$APP/$f", "$T/app/$f");
 copy(dirname($APP) . '/local/router.php', "$T/local/router.php");
 $CLAVE_AG = str_repeat('b', 24);
 file_put_contents("$T/app/config.php", "<?php define('CRM_CLAVE_AGENTE', '$CLAVE_AG'); define('CRM_AGENTE_USUARIO', 'pcifuentes');");

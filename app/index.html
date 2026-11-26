@@ -337,11 +337,21 @@ const CM_RE=/^CM-\d{6}-\d{2}$/;
 // Una oportunidad sin vínculo al Excel (o.fx) es antigua o creada a mano antes de esta regla: no suma al pipeline y queda
 // «pendiente del Excel» hasta que el archivo la traiga con su código CM.
 const enExcel=o=>!!o.fx;
+// CRM FS (nov 2026): las oportunidades se crean y gestionan solo en el CRM, con código OP-AAMMDD-NN que asigna el servidor
+// (guardado.php) y la marca crm. No entra nada por Excel: la importación del funnel no tiene entrada en la pantalla y el
+// funnel solo se exporta. Lo de o.fx queda para leer datos antiguos.
+const enFunnel=o=>!!o.fx||!!o.crm;
+const oppCRM=o=>!!o&&!o.fx&&!!o.crm;
+// Código provisional (el definitivo lo pone el servidor al guardar: este navegador no ve las oportunidades de todos)
+function provisionalOP(){const k=todayIso.slice(2,4)+todayIso.slice(5,7)+todayIso.slice(8,10);const used=new Set(S.opps.map(o=>String(o.code||'').toUpperCase()));
+ const u=String((S.seq||{}).opUlt||'');let n=u.startsWith('OP-'+k+'-')?Number(u.slice(10))||0:0;let c;do{n++;c=`OP-${k}-${String(n).padStart(2,'0')}`}while(used.has(c));return c}
 // Tipos de negocio del Excel y sus plazos. Cada tipo puede tener plazos propios (Configuración); lo que no se defina toma
 // los generales. Se iteran en conjunto: no todos los proyectos tienen el mismo plazo de consulta y respuesta.
 const TIPOS_NEGOCIO=[['Seg. Física','Seguridad Física'],['Seg. Electrónica','Seguridad Electrónica'],['Seg. Integral','Seguridad Integral'],['One Shot','One Shot']];
-const tipoLabel=o=>{const t=o.fx&&o.fx.tipo;const x=TIPOS_NEGOCIO.find(([k])=>k===t);return x?x[1]:(t||'Sin tipo')};
-function plazo(o){const R=S.config,t=(R.plazos||{})[o&&o.fx&&o.fx.tipo]||{};const v=(k,d)=>Number(t[k])>0?Number(t[k]):d;
+// Tipo de negocio: lo elige quien crea la oportunidad en el CRM (o.tipo); las antiguas lo traían del Excel (o.fx.tipo)
+const tipoDe=o=>o?(o.tipo||(o.fx&&o.fx.tipo)||''):'';
+const tipoLabel=o=>{const t=tipoDe(o);const x=TIPOS_NEGOCIO.find(([k])=>k===t);return x?x[1]:(t||'Sin tipo')};
+function plazo(o){const R=S.config,t=(R.plazos||{})[tipoDe(o)]||{};const v=(k,d)=>Number(t[k])>0?Number(t[k]):d;
  return{warn:v('warn',R.oppNoAct.warn),risk:v('risk',R.oppNoAct.risk),remind:v('remind',R.followup.remind),yellow:v('yellow',R.followup.yellow),red:v('red',R.followup.red),stalled:v('stalled',R.stalledDays)}}
 // En una oportunidad solo se mira el estatus (Excel) y se gestionan tareas: su «próxima acción» es su próxima tarea pendiente.
 // Días sin gestión: desde la última gestión real (actividad, tarea completada o «última conversación» del Excel);
@@ -369,7 +379,7 @@ function autoTask(o,rule,title,due,prio,once){const key=rule+':'+o.id;
  S.tasks.push({id:uid('t'),title,entityType:'opp',entityId:o.id,assigneeId:o.ownerId||S.currentUser,priority:prio,due,status:'Pendiente',createdAt:todayIso,by:'Automática',auto:key});
  audit(o.code,'Tarea automática','',title);return 1}
 function runAutomations(){if(STORE.mode==='conectando'&&STORE.fromLocal)return 0;if(S.mode==='real'&&promoteTargets())save();if(window.__migrado&&S.mode==='real'){window.__migrado=false;save()}const A=S.config.auto||{};if(!A.on||S.mode!=='real')return 0;let n=0;const R=S.config;
- for(const o of S.opps){if(!enExcel(o))continue;
+ for(const o of S.opps){if(!enFunnel(o))continue;
   if(o.status==='ganada'&&A.stage&&((o.bookedAt||'')>=addDays(-30)||(o.wonAt||'')>=addDays(-30)))n+=autoTask(o,'booking',`Traspaso a operaciones e inicio del servicio (${o.code})`,workday(addDays(1)),'Alta',true);
   if(o.status!=='abierta')continue;
   const d=idleDays(o),f=oppFollow(o);
@@ -773,6 +783,7 @@ function setSync(status,err){
 }
 function adoptRemote(r){
  if(STORE.fromLocal){try{localStorage.setItem(KEY+'-previo',localStorage.getItem(KEY)||'')}catch(e){}}
+ if(STORE.mode==='servidor')STORE.base=clon(r.data);
  S=r.data;migrate();if(r.written)STORE.written=r.written;STORE.remoteHas=true;saveLocal();setPend(false);
 }
 // Decide qué hacer al conectar: tomar lo del servidor/artefacto o subir lo local
@@ -781,7 +792,7 @@ function reconcile(remoteData,push,donde,remoteRev){
  const localReal=STORE.fromLocal&&S.mode==='real';
  if(remoteData){
   const remoteReal=remoteData.mode==='real';
-  if(localReal&&!remoteReal){push();toast(`Se subieron a ${donde} los cambios guardados en este navegador.`);return}
+  if(localReal&&!remoteReal){push('todo');toast(`Se subieron a ${donde} los cambios guardados en este navegador.`);return}
   if(localReal&&hasPend()){
    const base=localBaseRev();
    if(remoteRev!=null&&base!=null&&base===remoteRev){push();toast(`Se subieron a ${donde} los cambios guardados en este navegador.`);return}
@@ -789,7 +800,7 @@ function reconcile(remoteData,push,donde,remoteRev){
   }
   return 'adopt';
  }
- if(localReal){push();toast(`Listo: tus datos quedaron guardados en ${donde}. Ya puedes abrir el CRM desde el celular u otro computador.`)}
+ if(localReal){push('todo');toast(`Listo: tus datos quedaron guardados en ${donde}. Ya puedes abrir el CRM desde el celular u otro computador.`)}
 }
 function avisoPrevio(){
  if(!STORE.avisoPrevio)return;STORE.avisoPrevio=false;
@@ -841,21 +852,91 @@ async function connectServer(){
  if(r.status!==200){STORE.motivo=r.status===403&&r.j&&r.j.error?r.j.error:'El servidor respondió con un error ('+r.status+'). No registres nada hasta que vuelva la conexión.';STORE.mode='navegador';render();return}
  STORE.mode='servidor';STORE.ready=true;STORE.rev=Number(r.j.rev)||0;STORE.almacen=r.j.almacen||null;STORE.remoteHas=!!r.j.data;
  if(r.j.yo)aplicarSesion(r.j.yo,r.j.usuarios);
+ STORE.base=r.j.data?clon(r.j.data):null;
  if(reconcile(r.j.data,flushServer,'el servidor',STORE.rev)==='adopt'){adoptRemote({data:r.j.data});closeDrawer();avisoPrevio()}
  syncAjustes(r.j.ajustes);
  render();
  joanInit();
 }
-function flushServer(){
+/* Guardado registro por registro (el servidor lo explica en guardado.php)
+   STORE.base es la última versión que llegó del servidor. Al guardar se manda solo lo que cambió respecto de ella,
+   registro por registro y con la versión que había: el servidor junta lo que otras personas guardaron entremedio y
+   devuelve como conflicto solo lo que dos personas cambiaron a la vez. La copia completa se usa solo al iniciar el
+   CRM, al restaurar un respaldo o cuando no hay versión del servidor con qué comparar. */
+const clon=x=>x==null?x:JSON.parse(JSON.stringify(x));
+const NO_SUBIR=['users','currentUser'];
+const esColeccion=v=>Array.isArray(v)&&v.every(x=>x&&typeof x==='object'&&!Array.isArray(x)&&x.id!=null&&x.id!=='');
+function difDatos(base,act){
+ const registros=[],doc=[];const J=x=>JSON.stringify(x);
+ for(const k of Object.keys(act||{})){
+  if(NO_SUBIR.includes(k))continue;
+  const a=base?base[k]:undefined,b=act[k];
+  if(esColeccion(b)&&(a===undefined||esColeccion(a))){
+   const A=new Map((a||[]).map(x=>[String(x.id),x]));const vistos=new Set();let prev=null;
+   for(const x of b){const id=String(x.id);vistos.add(id);const ax=A.get(id);
+    if(!ax)registros.push({t:k,id:x.id,antes:null,despues:x,tras:prev});
+    else if(J(ax)!==J(x))registros.push({t:k,id:x.id,antes:ax,despues:x});
+    prev=x.id}
+   if(k!=='audit')for(const[id,ax]of A)if(!vistos.has(id))registros.push({t:k,id:ax.id,antes:ax,despues:null});   // la auditoría no se borra
+  }else if(J(a)!==J(b))doc.push({k,antes:a===undefined?null:a,despues:b});
+ }
+ return{registros,doc}}
+const difVacia=c=>!c.registros.length&&c.doc.every(x=>x.k==='savedAt');
+// Aplica cambios sobre d sin revisar conflictos (los revisa el servidor al guardar)
+function aplicarDif(d,c){
+ for(const r of c.registros){if(!Array.isArray(d[r.t]))d[r.t]=[];const L=d[r.t];const i=L.findIndex(x=>String(x.id)===String(r.id));
+  if(r.despues===null){if(i>=0)L.splice(i,1);continue}
+  if(i>=0){L[i]=clon(r.despues);continue}
+  if(r.antes!==null)continue;   // otra persona lo eliminó: no se revive
+  const j=r.tras==null?-1:L.findIndex(x=>String(x.id)===String(r.tras));
+  if(r.tras==null)L.unshift(clon(r.despues));else if(j>=0)L.splice(j+1,0,clon(r.despues));else L.push(clon(r.despues))}
+ for(const x of c.doc)d[x.k]=clon(x.despues);
+ return d}
+// Toma la versión del servidor y vuelve a poner encima lo que la persona cambió y todavía no se guardó (respecto de ref)
+function tomarServidor(data,ref){
+ const pend=ref?difDatos(ref,S):null;
+ STORE.base=clon(data);S=clon(data);migrate();
+ if(pend)aplicarDif(S,pend);
+ saveLocal();
+ if(pend&&!difVacia(pend)){setPend(true);queueRemote()}
+}
+const TABLA_NOMBRE={companies:'la empresa',contacts:'el contacto',leads:'el prospecto',opps:'la oportunidad',offers:'la oferta',plans:'el plan',activities:'la actividad',tasks:'la tarea',invoices:'la factura',recepciones:'el acta',doc:''};
+function avisarConflictos(cs){
+ const hora=x=>x?new Date(x).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit',hour12:false}):'';
+ openModal(`<h1 style="font-size:20px">Otra persona cambió lo mismo</h1><p class="sm">Mientras trabajabas, otra persona guardó cambios en ${cs.length===1?'este registro':'estos registros'}. Quedó su versión; lo demás que hiciste sí se guardó.</p><ul class="sm" style="padding-left:18px">${cs.map(c=>`<li>${esc((TABLA_NOMBRE[c.t]??'')+' «'+(c.nombre||c.id)+'»')}: ${c.motivo==='eliminado'?'lo eliminaron':'lo cambió '+(c.quien?esc(c.quien):'otra persona')+(c.en?' a las '+hora(c.en):'')}</li>`).join('')}</ul><p class="sm">Revísalo y, si hace falta, vuelve a hacer tu cambio.</p><div class="form-foot"><button class="btn pri" data-action="closeModal">Entendido</button></div>`)}
+function flushServer(modo){
  STORE.timer=null;
+ if(modo==='todo')STORE.base=null;
  STORE.queue=STORE.queue.then(async()=>{
   setSync('guardando');
   try{
-   const reemp=esReemplazo();const r=await api('POST','',Object.assign({baseRev:STORE.rev||0,data:S},reemp?{reemplazo:true}:{}));
+   const reemp=esReemplazo();const enviado=clon(S);
+   const cambios=!reemp&&STORE.base?difDatos(STORE.base,enviado):null;
+   if(cambios&&difVacia(cambios)){if(!STORE.timer)setPend(false);setSync('ok');return}   // nada que guardar
+   const r=await api('POST','',cambios?{baseRev:STORE.rev||0,cambios}:Object.assign({baseRev:STORE.rev||0,data:S},reemp?{reemplazo:true}:{}));
    if(r.status===200&&reemp){try{localStorage.removeItem(KEY+'-reemplazo')}catch(e){}}
    if(r.status===422&&r.j&&r.j.rechazo&&r.j.data){STORE.rev=Number(r.j.rev)||0;adoptRemote({data:r.j.data});render();setSync('ok');openModal(`<h1 style="font-size:20px">El servidor no aceptó el cambio</h1><p class="sm">${esc(r.j.error||'')}</p><p class="sm">Se cargó la versión del servidor, sin ese cambio.</p><div class="form-foot"><button class="btn pri" data-action="closeModal">Entendido</button></div>`);return}
-   if(r.status===200&&r.j&&Array.isArray(r.j.avisos)&&r.j.avisos.length&&r.j.data){STORE.rev=Number(r.j.rev)||0;adoptRemote({data:r.j.data});if(!STORE.timer)setPend(false);render();setSync('ok');openModal(`<h1 style="font-size:20px">Parte del cambio no se guardó</h1>${r.j.avisos.map(a=>`<p class="sm">${esc(a)}</p>`).join('')}<p class="sm">Lo demás quedó guardado. Se cargó la versión del servidor.</p><div class="form-foot"><button class="btn pri" data-action="closeModal">Entendido</button></div>`);return}
-   if(r.status===200){STORE.rev=r.j.rev;STORE.remoteHas=true;try{localStorage.setItem(KEY+'-rev',String(STORE.rev))}catch(e){}if(!STORE.timer)setPend(false);setSync('ok');return}
+   if(r.status===200&&r.j){
+    STORE.rev=Number(r.j.rev)||0;STORE.remoteHas=true;try{localStorage.setItem(KEY+'-rev',String(STORE.rev))}catch(e){}
+    const codigos=r.j.codigos&&Object.keys(r.j.codigos).length;
+    if(r.j.data){tomarServidor(r.j.data,enviado);render()}
+    else if(cambios){
+     // Nadie más guardó entremedio: la base queda con lo enviado y con lo que puso el servidor (códigos, trazabilidad)
+     aplicarDif(STORE.base,cambios);const J=x=>JSON.stringify(x);
+     for(const x of r.j.registros||[]){
+      const B=STORE.base[x.t]||(STORE.base[x.t]=[]);const bi=B.findIndex(y=>String(y.id)===String(x.id));
+      if(x.datos===null){if(bi>=0)B.splice(bi,1)}else if(bi>=0)B[bi]=clon(x.datos);else B.push(clon(x.datos));
+      // en la pantalla, solo si la persona no lo volvió a cambiar mientras se guardaba
+      const L=S[x.t]||[],si=L.findIndex(y=>String(y.id)===String(x.id)),e=(enviado[x.t]||[]).find(y=>String(y.id)===String(x.id));
+      if(si>=0&&J(L[si])===J(e)){if(x.datos===null)L.splice(si,1);else L[si]=clon(x.datos)}}
+     for(const[k,v]of Object.entries(r.j.doc||{})){STORE.base[k]=clon(v);if(J(S[k])===J(enviado[k]))S[k]=clon(v);else if(k==='seq'&&S.seq&&v)Object.keys(v).forEach(n=>{if(!(n in S.seq)||(typeof v[n]==='number'&&v[n]>S.seq[n])||typeof v[n]==='string')S.seq[n]=v[n]})}
+     saveLocal();if(codigos)render();
+    }else STORE.base=enviado;
+    if(!STORE.timer)setPend(false);setSync('ok');
+    if(r.j.conflictos&&r.j.conflictos.length)avisarConflictos(r.j.conflictos);
+    else if(Array.isArray(r.j.avisos)&&r.j.avisos.length)openModal(`<h1 style="font-size:20px">Parte del cambio no se guardó</h1>${r.j.avisos.map(a=>`<p class="sm">${esc(a)}</p>`).join('')}<p class="sm">Lo demás quedó guardado. Se cargó la versión del servidor.</p><div class="form-foot"><button class="btn pri" data-action="closeModal">Entendido</button></div>`);
+    if(codigos)toast(Object.values(r.j.codigos).length===1?`Código asignado: ${esc(Object.values(r.j.codigos)[0])}.`:`Códigos asignados: ${Object.values(r.j.codigos).map(esc).join(', ')}.`);
+    return}
    if(r.status===409&&r.j&&r.j.data){STORE.rev=Number(r.j.rev)||0;adoptRemote({data:r.j.data});render();setSync('ok');openModal('<h1 style="font-size:20px">Había cambios en otro dispositivo</h1><p class="sm">Mientras trabajabas aquí, se guardaron cambios desde otro dispositivo. Se cargó la versión más reciente del servidor. Revisa tu último cambio y, si no aparece, vuelve a hacerlo.</p><div class="form-foot"><button class="btn pri" data-action="closeModal">Entendido</button></div>');return}
    if(r.status===401){STORE.mode='clave';STORE.ready=false;setSync('');render();pedirEntrada('Tu sesión terminó. Vuelve a entrar: tus cambios siguen en este navegador y se suben al entrar.');return}
    if(r.status===403&&r.j&&r.j.error){setSync('');toast(esc(r.j.error));return}
@@ -867,7 +948,7 @@ async function refreshFromServer(forzar){
  try{const r=await api('GET','?accion=rev');if(r.status===401&&STORE.mode==='servidor'){STORE.mode='clave';STORE.ready=false;render();pedirEntrada('Tu sesión terminó. Vuelve a entrar.');return}
   if(r.status!==200||!r.j)return;if(r.j.almacen)STORE.almacen=r.j.almacen;
   if(r.j.ajustes&&syncAjustes(r.j.ajustes))render();
-  if(forzar===true||(Number(r.j.rev)||0)>(STORE.rev||0)){await STORE.queue;if(STORE.timer)return;const f=await api('GET','?accion=leer');if(f.status!==200||!f.j||!f.j.data)return;STORE.rev=Number(f.j.rev)||0;adoptRemote({data:f.j.data});if(f.j.yo)aplicarSesion(f.j.yo,f.j.usuarios);render();if(forzar!==true)toast('Datos actualizados con los cambios hechos por otra persona o en otro dispositivo.')}}catch(e){}
+  if(forzar===true||(Number(r.j.rev)||0)>(STORE.rev||0)){await STORE.queue;if(STORE.timer)return;const f=await api('GET','?accion=leer');if(f.status!==200||!f.j||!f.j.data)return;STORE.rev=Number(f.j.rev)||0;if(STORE.base)tomarServidor(f.j.data,STORE.base);else adoptRemote({data:f.j.data});if(f.j.yo)aplicarSesion(f.j.yo,f.j.usuarios);render();if(forzar!==true)toast('Datos actualizados con los cambios hechos por otra persona o en otro dispositivo.')}}catch(e){}
 }
 
 /* ---------- Chat con Joan (solo por Tailscale; api.php lo rechaza desde internet) ---------- */
@@ -1274,7 +1355,7 @@ const listSm=a=>`<ul class="sm" style="margin:0;padding-left:18px">${a.map(x=>`<
 /* ============ MOTOR DE ALERTAS ============ */
 function computeAlerts(){
  const A=[],R=S.config;
-  for(const o of S.opps.filter(o=>o.status==='abierta'&&enExcel(o))){
+  for(const o of S.opps.filter(o=>o.status==='abierta'&&enFunnel(o))){
   const base={entity:'opp',id:o.id,ownerId:o.ownerId,title:o.name,company:cname(o.companyId),amount:tcv(o)};
   const d=idleDays(o),P=plazo(o);
   if(d>=P.risk)A.push({...base,sev:'bad',group:'riesgo',kind:'Oportunidad en riesgo',detail:`${d} días sin actividad`,action:'Contactar al cliente y registrar la gestión'});
@@ -1287,7 +1368,7 @@ function computeAlerts(){
   if(ds>=P.stalled)A.push({...base,sev:'warn',group:'riesgo',kind:'Oportunidad estancada',detail:`${ds} días en ${stageOf(o.stage)?.name}`,action:'Definir cómo avanzar de etapa'});
  }
  // Cliente sin gestión: empresas con oportunidades abiertas del Excel o prospectos activos, sin ninguna gestión real reciente
- for(const c of S.companies){const os=S.opps.filter(o=>o.companyId===c.id&&o.status==='abierta'&&enExcel(o)),ls=S.leads.filter(l=>l.companyId===c.id&&LEAD_ACTIVE.includes(l.stage));if(!os.length&&!ls.length)continue;
+ for(const c of S.companies){const os=S.opps.filter(o=>o.companyId===c.id&&o.status==='abierta'&&enFunnel(o)),ls=S.leads.filter(l=>l.companyId===c.id&&LEAD_ACTIVE.includes(l.stage));if(!os.length&&!ls.length)continue;
   const d=clientIdle(c.id);if(d!==null&&d>=R.clientNoAct)A.push({entity:'company',id:c.id,ownerId:c.ownerId||S.currentUser,sev:d>=R.clientNoAct*2?'bad':'warn',group:'cliente',kind:'Cliente sin gestión',title:cname(c.id),company:'',amount:sum(os,tcv),detail:`${d} días sin gestión en ${os.length} oportunidad${os.length===1?'':'es'} y ${ls.length} prospecto${ls.length===1?'':'s'}`,action:'Contactar al cliente'})}
  for(const o of S.opps){const f=oppFollow(o);if(!f||f.sev==='ok')continue;
   A.push({entity:'opp',id:o.id,ownerId:o.ownerId,title:o.code+' · '+o.name,company:cname(o.companyId),amount:tcv(o),sev:f.sev,group:'oferta',kind:f.sev==='info'?'Recordar seguimiento de la oferta':'Oferta entregada sin seguimiento',detail:f.label,action:'Llamar al cliente y registrar el seguimiento'})}
@@ -1345,7 +1426,7 @@ function timeline(acts){if(!acts.length)return emptyMsg('Sin actividades registr
 /* ============ VISTA: MI DÍA ============ */
 function viewHoy(){
  const u=me(),month=todayIso.slice(0,7);
- const opps=mine(S.opps).filter(enExcel),open=opps.filter(o=>o.status==='abierta');
+ const opps=mine(S.opps).filter(enFunnel),open=opps.filter(o=>o.status==='abierta');
  const won=opps.filter(o=>o.status==='ganada'&&(o.wonAt||'').startsWith(month));
  const sold=sum(won,tcv);
  const yr=todayIso.slice(0,4);const facY=invoicedIn(yr),facM=invoicedIn(month),facPrev=invoicedOfPrevBookings(yr);
@@ -1603,7 +1684,7 @@ function oppCard(o){
  return `<div class="card ${miss.length?'flag':''} ${invClass(o)}" data-action="open" data-type="opp" data-id="${o.id}" tabindex="0">
   <div class="c-co">${esc(cname(o.companyId))}</div><div class="c-name">${esc(o.name)}</div>
   <div class="c-row"><span class="c-amt">${mm(tcv(o))}</span><span>${o.prob}%</span></div>
-  ${o.fx&&o.fx.tipo?`<div class="c-row"><span class="muted">${esc(tipoLabel(o))}</span></div>`:''}
+  ${tipoDe(o)?`<div class="c-row"><span class="muted">${esc(tipoLabel(o))}</span></div>`:''}
   ${o.status==='ganada'?`<div class="c-row"><span>Booking ${fmtDate(o.wonAt)}${(o.wonAt||'').slice(0,4)!==todayIso.slice(0,4)&&o.wonAt?' '+o.wonAt.slice(0,4):''}</span>${(o.wonAt||'').slice(0,7)===todayIso.slice(0,7)?'<span class="b b-ok">Este mes</span>':''}</div>${(()=>{const l=oppInvoices(o.id);const p=invPct(o);return `<div class="c-row"><span>${l.length?'Facturado '+mm(invoicedNet(l)):'Sin facturar'}</span>${p!==null?`<span>${p}%</span>`:''}</div>${p!==null&&p>0&&p<100?`<div class="meter" title="Facturado ${p}% de la proyección"><i style="width:${p}%"></i></div>`:''}${p!==null&&p>=100?`<div class="c-row"><span class="muted">Última factura ${fmtDate(oppInvoices(o.id).filter(invCounts).map(x=>x.date||'').sort().pop()||'')}</span></div>`:''}<div class="c-row">${recBadge(recOf(o.id))}</div>`})()}`:`<div class="c-row"><span>Cierre ${fmtDate(o.closeDate)}</span><span>${d} días en etapa</span></div>`}
   ${o.status==='abierta'?(()=>{const g=idleDays(o),R=plazo(o);return `<div class="c-row"><span class="b ${g>=R.risk?'b-bad':g>=R.warn?'b-warn':''}" title="Días desde la última gestión real">${g} días sin gestión</span></div>`})():''}
   <div class="c-row"><span>${esc(uname(o.ownerId))}</span>${o.currency!=='CLP'?`<span class="b">${o.currency}</span>`:''}</div>
@@ -1615,12 +1696,12 @@ function filteredOpps(){let os=mine(S.opps);if(UI.oppOwner)os=os.filter(o=>o.own
 // Años que se pueden ver en el Kanban: el actual, los de Booking y los de facturas
 function kanbanYears(){const ys=new Set([todayIso.slice(0,4)]);mine(S.opps).forEach(o=>{if(o.status==='ganada'&&o.wonAt)ys.add(o.wonAt.slice(0,4))});myInvoices().forEach(x=>{if(x.date)ys.add(x.date.slice(0,4))});return[...ys].sort().reverse()}
 function viewOpps(){
- const todas=filteredOpps();const pend=todas.filter(o=>o.status==='abierta'&&!enExcel(o));const fuera=todas.filter(o=>fueraFunnel(o)&&enExcel(o));const all=todas.filter(o=>enExcel(o)&&!fueraFunnel(o));const open=all.filter(o=>o.status==='abierta');
+ const todas=filteredOpps();const pend=todas.filter(o=>o.status==='abierta'&&!enFunnel(o));const fuera=todas.filter(o=>fueraFunnel(o)&&enFunnel(o));const all=todas.filter(o=>enFunnel(o)&&!fueraFunnel(o));const open=all.filter(o=>o.status==='abierta');
  const avisoFuera=fuera.length?`<div class="warnbox" style="margin-bottom:12px"><strong>${fuera.length} oportunidad${fuera.length>1?'es':''} fuera del funnel</strong> (en etapas de prospección, creadas antes en el CRM). No se muestran ni suman aquí: revísalas y ciérralas o trabájalas como prospecto. ${fuera.map(o=>`<a href="#" data-action="open" data-type="opp" data-id="${o.id}">${esc(cname(o.companyId))}: ${esc(o.name)} (${esc(stageOf(o.stage)?.name)})</a>`).join(' · ')}</div>`:'';
  const ausentes=open.filter(fxAusente);
 
  const avisoAus=ausentes.length?`<div class="warnbox warn" style="margin-bottom:12px"><strong>${ausentes.length} oportunidad${ausentes.length>1?'es':''} abierta${ausentes.length>1?'s':''} ${ausentes.length>1?'no vinieron':'no vino'} en la última importación del funnel.</strong> Siguen aquí con su historial y suman al pipeline. Revisa con Gerencia si siguen vigentes. ${ausentes.map(o=>`<a href="#" data-action="open" data-type="opp" data-id="${o.id}">${esc(cname(o.companyId))}: ${esc(o.name)} (desde ${esc(fmtDate(o.fx.ausente))})</a>`).join(' · ')}</div>`:'';
- const head=`<div class="page-h"><div><h1>Oportunidades</h1><p class="sub">${open.length} abiertas por ${mm(sum(open,tcv))}, ponderado ${mm(sum(open,weighted))}. Fuente: Excel de Gerencia${S.fxLast&&S.fxLast.at?', importado el '+fmtDate(S.fxLast.at):', aún sin importar'}. Para cambiar etapas o montos, actualiza el Excel e impórtalo.</p></div><div class="d-actions"><label class="btn pri" style="cursor:pointer" title="Excel o CSV exportado de la lista Funnel de Ventas en SharePoint">Importar funnel<input type="file" accept=".xlsx,.csv" data-funnel hidden></label><button class="btn" data-action="export" data-what="opps">Exportar</button></div></div>
+ const head=`<div class="page-h"><div><h1>Oportunidades</h1><p class="sub">${open.length} abiertas por ${mm(sum(open,tcv))}, ponderado ${mm(sum(open,weighted))}. Se crean y gestionan aquí, con código OP automático.</p></div><div class="d-actions"><button class="btn pri" data-action="newOpp">Nueva oportunidad</button><button class="btn" data-action="export" data-what="opps">Exportar</button></div></div>
  <div class="toolbar"><div class="seg"><button class="${UI.oppView==='kanban'?'on':''}" data-action="setUI" data-k="oppView" data-v="kanban">Kanban</button><button class="${UI.oppView==='tabla'?'on':''}" data-action="setUI" data-k="oppView" data-v="tabla">Tabla</button></div>
  ${seesAll()?`<select data-filter="oppOwner" aria-label="Responsable">${opt(S.users.map(u=>[u.id,u.name]),UI.oppOwner,'Todos los ejecutivos')}</select>`:''}
  <select data-filter="oppIndustry" aria-label="Industria">${opt(INDUSTRIES,UI.oppIndustry,'Todas las industrias')}</select>
@@ -1679,10 +1760,10 @@ function drawerOpp(id){
   
   
  </div>
- <div class="section"><h2>${enExcel(o)?'Estatus (Excel de Gerencia)':'Pendiente del Excel'}</h2>
- ${enExcel(o)?`<p class="muted sm" style="margin:0 0 8px">Solo lectura. Importación del ${esc(fmtDate((S.fxLast&&S.fxLast.at)||''))}; para cambiarlo, actualiza el Excel e impórtalo.</p>`:`<div class="warnbox warn">No viene en el Excel: no suma al pipeline. Cuando el Excel traiga su código CM, se vincula y toma sus datos.</div>`}
+ <div class="section"><h2>${enExcel(o)?'Estatus (Excel de Gerencia)':oppCRM(o)?'Estatus':'Pendiente del Excel'}${oppCRM(o)&&canEdit(o)?` <button class="btn sm" data-action="editOpp" data-id="${o.id}">Editar</button>`:''}</h2>
+ ${enExcel(o)?`<p class="muted sm" style="margin:0 0 8px">Solo lectura. Importación del ${esc(fmtDate((S.fxLast&&S.fxLast.at)||''))}; para cambiarlo, actualiza el Excel e impórtalo.</p>`:oppCRM(o)?'':`<div class="warnbox warn">Creada antes en el CRM, sin código OP: no suma al pipeline. Si sigue vigente, créala de nuevo con «Nueva oportunidad».</div>`}
  <div class="kv">
-  <div><span class="muted sm">Código</span><strong>${esc(o.code)}</strong></div>
+  <div><span class="muted sm">Código</span><strong>${esc(o.code)}</strong>${oppCRM(o)&&STORE.mode==='servidor'&&STORE.status==='guardando'?' <span class="muted sm">(provisional)</span>':''}</div>
   <div><span class="muted sm">Etapa</span><strong>${esc(stageOf(o.stage)?.name||o.stage)}${STAGE_DESC[o.stage]?' · '+esc(STAGE_DESC[o.stage]):''}</strong></div>
   <div><span class="muted sm">Probabilidad</span><strong>${o.prob}%</strong></div>
   <div><span class="muted sm">Proyección</span><strong>${clp(tcv(o))}</strong></div>
@@ -1697,7 +1778,7 @@ function drawerOpp(id){
   <div><span class="muted sm">Responsable</span><strong>${esc(uname(o.ownerId))}</strong></div>
   ${o.fx&&o.fx.title?`<div class="full"><span class="muted sm">Título en el Excel</span><strong>${esc(o.fx.title)}</strong></div>`:''}
  </div>
- ${enExcel(o)?'':`<form data-form="oppCode" data-id="${o.id}" style="margin-top:10px"><div class="fgrid"><label class="f">Código CM<input name="code" value="${esc(o.code)}" required pattern="CM-[0-9]{6}-[0-9]{2}"><span class="hint">Corrígelo para que coincida con el Excel.</span></label></div><p class="err" data-err></p><div class="form-foot"><button class="btn" type="submit">Guardar código</button></div></form>`}
+
  </div>
  ${recSection(o)}
  ${invoiceSection(o)}
@@ -1892,7 +1973,7 @@ function repTabs(){return `<div class="page-h"><div><h1>Reportes</h1><p class="s
 // Período del informe = año de facturación (fecha de la factura). Por defecto el año en curso; '' = todo.
 const factYear=()=>UI.repFactYear===null?todayIso.slice(0,4):UI.repFactYear;
 function factRows(){const yr=factYear(),st=UI.repFactState;
- return mine(S.opps).filter(o=>o.status==='ganada'&&enExcel(o)).map(o=>{const l=oppInvoices(o.id);const proj=tcv(o),fac=invoicedNet(l);const r=recOf(o.id);
+ return mine(S.opps).filter(o=>o.status==='ganada'&&enFunnel(o)).map(o=>{const l=oppInvoices(o.id);const proj=tcv(o),fac=invoicedNet(l);const r=recOf(o.id);
   const cnt=l.filter(invCounts);const last=cnt.map(x=>x.date).sort().pop()||'';const facP=yr?sum(cnt.filter(x=>(x.date||'').startsWith(yr)),x=>x.net||0):fac;
   return{o,proj,fac,facP,pend:Math.max(proj-fac,0),pct:proj>0?Math.round(fac/proj*100):0,porCobrar:sum(l.filter(x=>x.status==='Emitida'),x=>x.total||0),porEmitir:sum(l.filter(x=>x.status==='Por emitir'),x=>x.net||0),n:cnt.length,last,rec:r,prev:yr&&(o.wonAt||'').slice(0,4)<yr}})
   // en un año: lo cerrado ese año y lo facturado ese año (aunque se haya cerrado antes, porque suma a la meta).
@@ -1922,7 +2003,7 @@ function viewFactReport(){
  const R=factRows();const tp=sum(R,x=>x.proj),tf=sum(R,x=>x.fac),tP=sum(R,x=>x.facP),tPrev=sum(R.filter(x=>x.prev),x=>x.facP);const target=yr?metaYear(yr):0;
  const pendN=R.filter(x=>x.pct<100).length,sinN=R.filter(x=>x.fac===0).length,actas=R.filter(x=>!recDone(x.rec)).length;
  return `<div class="toolbar" style="justify-content:space-between"><div style="display:flex;gap:8px;flex-wrap:wrap"><select data-filter="repFactYear" aria-label="Período de facturación">${opt(years.map(y=>[y,'Facturación '+y]),yr,'Todo el historial')}</select><select data-filter="repFactState" aria-label="Facturación">${opt([['pend','Pendientes de facturar'],['sin','Sin ninguna factura'],['ok','Facturadas al 100 %']],UI.repFactState,'Todas')}</select></div><button class="btn" data-action="export" data-what="facturacion">Exportar</button></div>
- <p class="sub" style="margin:0 0 10px">${yr?`Lo facturado en ${yr} es lo que cuenta para la meta del año, por fecha de factura, aunque la oportunidad se haya cerrado antes. Se listan las cerradas en ${yr} y las de años anteriores que tienen factura en ${yr}.${(()=>{const pv=mine(S.opps).filter(o=>o.status==='ganada'&&enExcel(o)&&(o.wonAt||'').slice(0,4)<yr&&(invPct(o)??0)<100&&!oppInvoices(o.id).some(x=>invCounts(x)&&(x.date||'').startsWith(yr)));const ys=[...new Set(pv.map(o=>o.wonAt.slice(0,4)))].sort();return pv.length?` ${pv.length} Booking de ${ys.join(' y ')} con saldo y sin factura en ${yr} no se listan aquí: ${ys.map(y=>`<a href="#" data-action="setUI" data-k="repFactYear" data-v="${y}">ver ${y}</a>`).join(' · ')}.`:''})()}`:'Todo el historial de oportunidades cerradas (Booking).'} Facturado = neto de las facturas emitidas y pagadas; pendiente = proyección del Excel menos todo lo facturado. En contratos recurrentes la proyección es el contrato completo, así que lo pendiente baja mes a mes.</p>
+ <p class="sub" style="margin:0 0 10px">${yr?`Lo facturado en ${yr} es lo que cuenta para la meta del año, por fecha de factura, aunque la oportunidad se haya cerrado antes. Se listan las cerradas en ${yr} y las de años anteriores que tienen factura en ${yr}.${(()=>{const pv=mine(S.opps).filter(o=>o.status==='ganada'&&enFunnel(o)&&(o.wonAt||'').slice(0,4)<yr&&(invPct(o)??0)<100&&!oppInvoices(o.id).some(x=>invCounts(x)&&(x.date||'').startsWith(yr)));const ys=[...new Set(pv.map(o=>o.wonAt.slice(0,4)))].sort();return pv.length?` ${pv.length} Booking de ${ys.join(' y ')} con saldo y sin factura en ${yr} no se listan aquí: ${ys.map(y=>`<a href="#" data-action="setUI" data-k="repFactYear" data-v="${y}">ver ${y}</a>`).join(' · ')}.`:''})()}`:'Todo el historial de oportunidades cerradas (Booking).'} Facturado = neto de las facturas emitidas y pagadas; pendiente = proyección del Excel menos todo lo facturado. En contratos recurrentes la proyección es el contrato completo, así que lo pendiente baja mes a mes.</p>
  <div class="kpis">
   ${yr?`<div class="kpi"><div class="l">Facturado en ${yr} (meta)</div><div class="v">${mm(tP)}</div><div class="h">${target?Math.round(tP/target*100)+'% de la meta anual de '+mm(target)+' · ':''}${tPrev?mm(tPrev)+' de Booking de años anteriores':'neto, por fecha de factura'}</div></div>`:''}
   <div class="kpi"><div class="l">Oportunidades</div><div class="v">${R.length}</div><div class="h">proyección ${mm(tp)}</div></div>
@@ -1966,7 +2047,7 @@ function viewConvReport(){
  ${R.map(x=>`<tr class="click" data-action="open" data-type="${x.o?'opp':'lead'}" data-id="${x.o?x.o.id:x.l.id}"><td><strong>${esc(x.l.name||x.l.service||'Prospecto')}</strong><br><span class="muted sm">${esc(x.l.code||'')}</span></td><td>${esc(cname(x.l.companyId))}</td><td>${esc(x.l.source||'—')}</td><td>${fmtDate(x.l.createdAt)}</td><td>${fmtDate(x.conv)}</td><td class="num">${x.dias??'—'}</td><td>${x.o?esc(x.o.code):'—'}</td><td>${convState(x)}</td><td class="num">${x.o?mm(x.monto):'—'}</td><td class="num">${x.fac?mm(x.fac):'—'}</td></tr>`).join('')||`<tr><td colspan="10">${emptyMsg('Ningún prospecto se ha convertido en oportunidad en este período.')}</td></tr>`}
  </tbody></table></div>`}
 function viewReportsOpps(){
- const os=mine(S.opps).filter(enExcel);const open=os.filter(o=>o.status==='abierta');const won=os.filter(o=>o.status==='ganada');const lost=os.filter(o=>o.status==='perdida');
+ const os=mine(S.opps).filter(enFunnel);const open=os.filter(o=>o.status==='abierta');const won=os.filter(o=>o.status==='ganada');const lost=os.filter(o=>o.status==='perdida');
  const year=todayIso.slice(0,4);const wonY=won.filter(o=>(o.wonAt||'').startsWith(year));
  const winRate=won.length+lost.length?Math.round(won.length/(won.length+lost.length)*100):0;
  const ticket=won.length?sum(won,tcv)/won.length:0;
@@ -2036,7 +2117,7 @@ function viewConfig(){
  <div class="section"><h2>Auditoría (últimos cambios)</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Usuario</th><th>Registro</th><th>Campo</th><th>Valor anterior</th><th>Valor nuevo</th></tr></thead><tbody>${S.audit.slice(0,60).map(a=>`<tr><td>${esc(a.at)}</td><td>${esc(uname(a.userId))}</td><td>${esc(a.entity)}</td><td>${esc(a.field)}</td><td>${esc(a.oldV)}</td><td>${esc(a.newV)}</td></tr>`).join('')}</tbody></table></div></div>
  <div class="section"><h2>Dónde se guardan tus datos</h2><p class="sm" style="max-width:78ch">${STORE.mode==='servidor'?(canSync()?'Los datos se guardan en el servidor y cada persona entra con su cuenta: ves lo que te corresponde según tu rol y tu equipo, y el servidor revisa cada cambio. Al volver a la pestaña se cargan los cambios hechos por otras personas o en otro dispositivo. El servidor guarda además respaldos por hora y por día.':'Estás con datos de ejemplo, que no se suben al servidor. Restaura tu respaldo o empieza con tus datos y todo lo que registres quedará en el servidor.'):STORE.mode==='artefacto'?(canSync()?'Tus datos se guardan en la base de datos de este artefacto, en un espacio privado que solo tú puedes ver, y se sincronizan entre tus dispositivos.':'Estás con datos de ejemplo, que no se suben al artefacto.'):STORE.mode==='clave'?'El servidor está disponible, pero no has entrado con tu usuario en este dispositivo. Mientras tanto, los cambios quedan solo en este navegador.':STORE.mode==='conectando'?'Conectando con el guardado…':'Los datos quedan solo en este navegador. Descarga un respaldo al menos una vez por semana.'}</p>
  ${STORE.mode==='clave'?'<div class="d-actions" style="margin-bottom:8px"><button class="btn pri" data-action="askKey">Entrar</button></div>':''}<p class="sm muted">Modo actual: ${S.mode==='real'?'datos reales':'datos de ejemplo'}. Último respaldo: ${S.lastBackup?fmtDate(S.lastBackup)+' ('+rel(S.lastBackup)+')':'nunca'}.</p>
- <div class="d-actions"><button class="btn pri" data-action="backup">Descargar respaldo</button>${!sesion||admin?'<label class="btn" style="cursor:pointer">Restaurar respaldo<input type="file" accept=".json,application/json" data-restore hidden></label>':''}${!sesion||esTodo()?'<label class="btn" style="cursor:pointer">Importar funnel<input type="file" accept=".xlsx,.csv" data-funnel hidden></label>':''}${S.mode!=='real'&&(!sesion||admin)?'<button class="btn danger" data-action="cleanStart">Empezar con mis datos</button>':''}</div></div>
+ <div class="d-actions"><button class="btn pri" data-action="backup">Descargar respaldo</button>${!sesion||admin?'<label class="btn" style="cursor:pointer">Restaurar respaldo<input type="file" accept=".json,application/json" data-restore hidden></label>':''}${S.mode!=='real'&&(!sesion||admin)?'<button class="btn danger" data-action="cleanStart">Empezar con mis datos</button>':''}</div></div>
  ${S.mode!=='real'&&!sesion?'<div class="section"><h2>Datos de demostración</h2><p class="sm muted">Restaura los datos de ejemplo. Se pierden los cambios hechos sobre ellos.</p><button class="btn danger" data-action="resetDemo">Restaurar datos de ejemplo</button></div>':''}`;
 }
 
@@ -2175,12 +2256,36 @@ function contactForm(k,company){
   <label class="f full">Observaciones<textarea name="notes" placeholder="Link de LinkedIn y otros datos">${esc(k.notes)}</textarea><span class="hint">Pega aquí el link del perfil de LinkedIn (linkedin.com/in/…). Para ser contacto de un prospecto necesita correo, teléfono o ese link.</span></label>
  </div><p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">${k.id?'Guardar cambios':'Crear contacto'}</button></div></form>`;
 }
-function oppNewForm(company){
+// Oportunidad nueva del CRM (d: datos del formulario; base: empresa, responsable y lo que viene del prospecto). Devuelve el error si falta algo.
+function nuevaOpp(d,base){
+ const o=Object.assign({id:uid('o'),code:provisionalOP(),crm:true,name:String(d.name||'').trim(),companyId:'',siteId:'',ownerId:S.currentUser,stage:d.stage||'oferta',prob:stageOf(d.stage||'oferta').p,tipo:d.tipo||'',currency:d.currency||'CLP',oneTime:num(d.oneTime),monthly:num(d.monthly),term:num(d.term),closeDate:d.closeDate,nextAction:String(d.nextAction||'').trim(),nextActionDate:d.nextActionDate,stageEnteredAt:todayIso,createdAt:todayIso,status:'abierta',contactIds:[],need:'',pain:'',competitors:'',currentProvider:'',strategy:'',risks:'',probReason:'',history:[],services:[]},base);
+ if(!o.companyId)return 'Selecciona la empresa.';
+ if(!o.name)return 'Falta el nombre de la oportunidad.';
+ if(!o.tipo)return 'Selecciona el tipo de negocio.';
+ if(!(tcv(o)>0))return 'Ingresa al menos un monto: único, o mensual con plazo en meses.';
+ if(!o.closeDate)return 'Falta la fecha estimada de cierre.';
+ if(o.closeDate<todayIso)return 'La fecha de cierre no puede estar en el pasado.';
+ return o}
+function oppEditForm(o){
+ return `<h1 style="font-size:20px">Editar ${esc(o.code)}</h1><p class="sub sm">Cada cambio queda en la auditoría con tu nombre.</p><form data-form="oppEdit" data-id="${o.id}" style="margin-top:12px"><div class="fgrid">
+  <label class="f full">Nombre de la oportunidad<input name="name" required value="${esc(o.name)}"></label>
+  ${o.status==='abierta'?`<label class="f">Etapa<select name="stage">${opt(FUNNEL_STAGES.filter(s=>!LEGACY_STAGES.includes(s.id)).map(s=>[s.id,s.name+(STAGE_DESC[s.id]?' · '+STAGE_DESC[s.id]:'')]),o.stage)}</select></label>`:''}
+  <label class="f">Probabilidad (%)<input type="number" min="0" max="100" name="prob" value="${esc(o.prob)}"></label>
+  <label class="f">Tipo de negocio<select name="tipo">${opt(TIPOS_NEGOCIO,tipoDe(o),'Sin tipo')}</select></label>
+  <label class="f">Moneda<select name="currency">${opt(['CLP','UF','USD'],o.currency||'CLP')}</select></label>
+  <label class="f">Monto único<input type="number" min="0" step="any" name="oneTime" value="${esc(o.oneTime||0)}"></label>
+  <label class="f">Monto mensual<input type="number" min="0" step="any" name="monthly" value="${esc(o.monthly||0)}"></label>
+  <label class="f">Plazo (meses)<input type="number" min="0" name="term" value="${esc(o.term||0)}"></label>
+  <label class="f">Fecha estimada de cierre<input type="date" name="closeDate" required value="${esc(o.closeDate||'')}"></label>
+  <label class="f">Responsable<select name="ownerId">${userOpts(o.ownerId)}</select></label>
+ </div><p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Guardar cambios</button></div></form>`}
+function oppNewForm(company,lead){
  return `<h1 style="font-size:20px">Nueva oportunidad</h1><p class="sub sm">Todos los campos de la regla fundamental son obligatorios.</p><form data-form="newOpp" style="margin-top:12px"><div class="fgrid">
   <label class="f full">Empresa<select name="companyId" required>${opt(S.companies.map(c=>[c.id,c.tradeName||c.legalName]),company,'Selecciona la empresa')}</select></label>
   <label class="f full">Nombre de la oportunidad<input name="name" required placeholder="Servicio y sitio, por ejemplo: CCTV Parque FV Taltal"></label>
-  <label class="f">Código CM<input name="code" required value="${nextCM(todayIso)}" pattern="CM-[0-9]{6}-[0-9]{2}"><span class="hint">Fecha de hoy y correlativo del día. Corrígelo si corresponde.</span></label>
+  <label class="f">Código<input value="${provisionalOP()}" disabled><span class="hint">Automático: fecha de creación y correlativo del día. El servidor lo confirma al guardar.</span></label>
   <label class="f">Etapa<select name="stage">${opt(FUNNEL_STAGES.filter(s=>s.id!=='adjudicada').map(s=>[s.id,s.name+' · '+STAGE_DESC[s.id]]),'oferta')}</select></label>
+  <label class="f">Tipo de negocio<select name="tipo" required>${opt(TIPOS_NEGOCIO,'','Selecciona el tipo')}</select><span class="hint">Define los plazos de seguimiento y la línea de la meta.</span></label>
   <label class="f">Moneda<select name="currency">${opt(['CLP','UF','USD'],'CLP')}</select></label>
   <label class="f">Monto único<input type="number" min="0" step="any" name="oneTime" value="0"></label>
   <label class="f">Monto mensual<input type="number" min="0" step="any" name="monthly" value="0"></label>
@@ -2232,13 +2337,26 @@ const ACTIONS={
  editCompany:d=>openModal(companyForm(byId(S.companies,d.id))),
  newContact:d=>openModal(contactForm(null,d.company)),
  editContact:d=>openModal(contactForm(byId(S.contacts,d.id))),
- newOpp:()=>toast('Las oportunidades vienen solo del Excel de Gerencia. Para una nueva, conviértela desde un prospecto (reserva el código CM) y cárgala en el Excel.'),
+ newOpp:d=>openModal(oppNewForm(d&&d.company||'')),
+ editOpp:d=>{const o=byId(S.opps,d.id);if(!oppCRM(o))return;openModal(oppEditForm(o))},
  newLead:()=>openModal(leadNewForm()),
  convertLead:d=>{const l=byId(S.leads,d.id);const libres=S.opps.filter(o=>o.companyId===l.companyId&&enExcel(o)&&!o.leadId);
-  openModal(`<h1 style="font-size:20px">Pasar a oferta</h1><p class="sub sm">Las oportunidades y su código CM vienen del Excel de Gerencia. Si la oferta ya está en el Excel, vincúlala ahora; si no, el prospecto queda esperando y la vinculas cuando aparezca (desde la ficha del prospecto).</p><form data-form="convert" data-id="${l.id}" style="margin-top:12px"><div class="fgrid">
-  <label class="f full">Oportunidad del Excel<select name="oppId">${opt(libres.map(o=>[o.id,o.code+' · '+o.name+' ('+(stageOf(o.stage)?.name||'')+')']),'',libres.length?'Todavía no está en el Excel':'No hay oportunidades de '+cname(l.companyId)+' sin vincular')}</select></label>
+  openModal(`<h1 style="font-size:20px">Convertir en oportunidad</h1><p class="sub sm">Se crea la oportunidad en el CRM con su código OP, ligada a ${esc(l.code||'este prospecto')}. Sus montos, etapa y fecha de cierre se gestionan desde la oportunidad.</p>
+  <form data-form="convert" data-id="${l.id}" style="margin-top:12px"><div class="fgrid">
+  <label class="f full">Nombre de la oportunidad<input name="name" required value="${esc(l.name||l.service||'')}" placeholder="Servicio y sitio, por ejemplo: CCTV Parque FV Taltal"></label>
+  <label class="f">Código<input value="${provisionalOP()}" disabled><span class="hint">Automático; el servidor lo confirma al guardar.</span></label>
+  <label class="f">Etapa<select name="stage">${opt(FUNNEL_STAGES.filter(s=>s.id!=='adjudicada').map(s=>[s.id,s.name+' · '+STAGE_DESC[s.id]]),'oferta')}</select></label>
+  <label class="f">Tipo de negocio<select name="tipo" required>${opt(TIPOS_NEGOCIO,'','Selecciona el tipo')}</select><span class="hint">Define los plazos de seguimiento y la línea de la meta.</span></label>
+  <label class="f">Moneda<select name="currency">${opt(['CLP','UF','USD'],'CLP')}</select></label>
+  <label class="f">Monto único<input type="number" min="0" step="any" name="oneTime" value="0"></label>
+  <label class="f">Monto mensual<input type="number" min="0" step="any" name="monthly" value="0"></label>
+  <label class="f">Plazo (meses)<input type="number" min="0" name="term" value="0"></label>
+  <label class="f">Fecha estimada de cierre<input type="date" name="closeDate" required></label>
+  <label class="f">Próxima acción<input name="nextAction" required value="${esc(l.nextAction||'')}"></label>
+  <label class="f">Fecha próxima acción<input type="date" name="nextActionDate" value="${esc(l.nextActionDate&&l.nextActionDate>=todayIso?l.nextActionDate:todayIso)}" required></label>
   <label class="f full">Nota<textarea name="note" placeholder="Qué se va a ofertar, plazos, quién prepara la oferta"></textarea></label>
- </div><p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Pasar a oferta</button></div></form>`)},
+  ${libres.length?`<label class="f full">O vincúlalo con una del Excel de Gerencia<select name="oppId">${opt(libres.map(o=>[o.id,o.code+' · '+o.name+' ('+(stageOf(o.stage)?.name||'')+')']),'','No, crear una nueva')}</select><span class="hint">Si eliges una, no se crea otra.</span></label>`:''}
+ </div><p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Crear oportunidad</button></div></form>`)},
  linkLead:d=>{const l=byId(S.leads,d.id);const libres=S.opps.filter(o=>enExcel(o)&&!o.leadId).sort((a,b)=>(a.companyId===l.companyId?0:1)-(b.companyId===l.companyId?0:1));
   openModal(`<h1 style="font-size:20px">Vincular con la oportunidad del Excel</h1><form data-form="linkLead" data-id="${l.id}" style="margin-top:12px"><div class="fgrid"><label class="f full">Oportunidad<select name="oppId" required>${opt(libres.map(o=>[o.id,o.code+' · '+cname(o.companyId)+': '+o.name]),'','Selecciona la oportunidad')}</select><span class="hint">Primero las de ${esc(cname(l.companyId))}.</span></label></div><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Vincular</button></div></form>`)},
  nurtureLead:d=>openModal(`<h1 style="font-size:20px">Pasar a nurturing</h1><p class="sub sm">El prospecto sale del Kanban y vuelve como próxima acción en la fecha que indiques.</p><form data-form="disq" data-id="${d.id}" style="margin-top:12px"><input type="hidden" name="nurture" value="1"><div class="fgrid"><label class="f">Recontactar el<input type="date" name="recontact" required value="${addDays(90)}"></label><label class="f">Motivo<select name="reason" required>${opt(DISQ_REASONS,'','Selecciona un motivo')}</select></label><label class="f full">Comentario<textarea name="comment" required minlength="10"></textarea></label></div><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Pasar a nurturing</button></div></form>`),
@@ -2249,8 +2367,8 @@ const ACTIONS={
   const filas=H.map(h=>{let det='';if(h.accion==='cambio'&&h.antes&&h.despues){const ks=[...new Set(Object.keys(h.antes).concat(Object.keys(h.despues)))].filter(k=>!IGN.includes(k)&&JSON.stringify(h.antes[k])!==JSON.stringify(h.despues[k]));
     det=ks.map(k=>k==='fx'?`<b>Datos del Excel</b> actualizados`:`<b>${esc(LAB[k]||k)}</b>: ${esc(corto(h.antes[k]))} → ${esc(corto(h.despues[k]))}`).join('<br>')}
    else det=({alta:'Creación',baja:'Eliminado (recuperable)',restaurado:'Recuperado','migración':'Cargado al pasar a la base de datos'})[h.accion]||esc(h.accion);
-   return `<tr><td style="white-space:nowrap">${esc(new Date(h.en).toLocaleString('es-CL',{day:'2-digit',month:'short',year:'2-digit',hour:'2-digit',minute:'2-digit'}))}</td><td>${esc(h.origen)}</td><td>${det}</td></tr>`}).join('');
-  openModal(`<h1 style="font-size:20px">Historial de cambios</h1><p class="sub sm">Todo lo que ha cambiado en este registro, del más reciente al más antiguo, con su origen (pantalla, Joan o importación).</p><div class="tbl-wrap" style="max-height:60vh;overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Fecha</th><th>Origen</th><th>Cambio</th></tr></thead><tbody>${filas||`<tr><td colspan="3">${emptyMsg('Sin cambios registrados todavía.')}</td></tr>`}</tbody></table></div><div class="form-foot"><button class="btn" data-action="closeModal">Cerrar</button></div>`);const m=$('#modalLayer .modal');if(m)m.classList.add('wide')},
+   return `<tr><td style="white-space:nowrap">${esc(new Date(h.en).toLocaleString('es-CL',{day:'2-digit',month:'short',year:'2-digit',hour:'2-digit',minute:'2-digit'}))}</td><td>${esc(h.usuario?uname(h.usuario):'—')}</td><td>${esc(h.origen)}</td><td>${det}</td></tr>`}).join('');
+  openModal(`<h1 style="font-size:20px">Historial de cambios</h1><p class="sub sm">Todo lo que ha cambiado en este registro, del más reciente al más antiguo, con quién lo hizo y su origen (pantalla, Joan o importación).</p><div class="tbl-wrap" style="max-height:60vh;overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Fecha</th><th>Persona</th><th>Origen</th><th>Cambio</th></tr></thead><tbody>${filas||`<tr><td colspan="4">${emptyMsg('Sin cambios registrados todavía.')}</td></tr>`}</tbody></table></div><div class="form-foot"><button class="btn" data-action="closeModal">Cerrar</button></div>`);const m=$('#modalLayer .modal');if(m)m.classList.add('wide')},
  eliminados:async()=>{let r;try{r=await api('GET','?accion=eliminados')}catch(e){return toast('No se pudo leer la lista.')}
   if(r.status!==200||!r.j)return toast('No se pudo leer la lista.');const L=r.j.eliminados||[];
   const TAB={opps:'Oportunidad',leads:'Prospecto',tasks:'Tarea',activities:'Actividad',companies:'Empresa',contacts:'Contacto',offers:'Oferta',plans:'Plan',users:'Usuario',invoices:'Factura',recepciones:'Acta de recepción'};
@@ -2295,7 +2413,7 @@ const ACTIONS={
  prGran:d=>{UI.prGran=d.v;UI.prPer='';render()},
  prPer:d=>{UI.prPer=d.v;render()},
  repPer:d=>{UI.repPer=d.v;render()},
- exportPeriod:()=>{const os=mine(S.opps).filter(enExcel);const g=UI.repGran;downloadCSV(`crm-resultados-${({mes:'mensual',trimestre:'trimestral',anio:'anual'})[g]}-${todayIso}.csv`,perList(os,g).map(k=>{const s=perStats(os,k,g);return{'Período':perLabel(k,g),'Oportunidades nuevas':s.nuevas,'Pipeline nuevo CLP':Math.round(s.pipeNuevo),'Ganadas':s.ganadas,'Perdidas':s.perdidas,'Win rate %':s.tasa==null?'':Math.round(s.tasa*100),'Ventas CLP':Math.round(s.ventas),'Ticket promedio CLP':s.ticket==null?'':Math.round(s.ticket),'Ciclo de venta días':s.ciclo==null?'':Math.round(s.ciclo)}}))},
+ exportPeriod:()=>{const os=mine(S.opps).filter(enFunnel);const g=UI.repGran;downloadCSV(`crm-resultados-${({mes:'mensual',trimestre:'trimestral',anio:'anual'})[g]}-${todayIso}.csv`,perList(os,g).map(k=>{const s=perStats(os,k,g);return{'Período':perLabel(k,g),'Oportunidades nuevas':s.nuevas,'Pipeline nuevo CLP':Math.round(s.pipeNuevo),'Ganadas':s.ganadas,'Perdidas':s.perdidas,'Win rate %':s.tasa==null?'':Math.round(s.tasa*100),'Ventas CLP':Math.round(s.ventas),'Ticket promedio CLP':s.ticket==null?'':Math.round(s.ticket),'Ciclo de venta días':s.ciclo==null?'':Math.round(s.ciclo)}}))},
  goPlan:d=>{closeDrawer();closeNav();location.hash='planes/'+d.id},
  newPlan:()=>openModal(planForm()),
  editPlan:d=>openModal(planForm(byId(S.plans,d.id))),
@@ -2565,10 +2683,13 @@ const SUBMITS={
    if(tg.findTaskId){const x=byId(S.tasks,tg.findTaskId);if(x&&isOpenTask(x)){x.status='Completada';x.doneAt=todayIso}delete tg.findTaskId}
    const ant=tg.status;tg.status='Individual';tg.individualAt=todayIso;audit(pl.name,'Prospecto individual '+cname(tg.companyId),ant,l.code)}
   save();closeModal();location.hash='prospectos';render();openEntity('lead',l.id);toast(`Prospecto ${l.code} creado. Completa el scoring para priorizarlo.`)},
- convert:(d,f)=>{const l=byId(S.leads,f.dataset.id);l.cmNote=(d.note||'').trim();l.cmAt=todayIso;setLeadStage(l,'Oportunidad creada');markTargetOpp(l.companyId);
-  const o=d.oppId?byId(S.opps,d.oppId):null;if(o)linkLeadOpp(l,o);
-  save();closeModal();render();
-  if(o){openEntity('opp',o.id);toast(`${esc(l.code)} quedó ligado a ${esc(o.code)}.`)}else{openEntity('lead',l.id);toast(`${esc(l.code)} pasó a oferta. Cuando aparezca en el Excel, vincúlalo desde su ficha.`)}},
+ convert:(d,f)=>{const l=byId(S.leads,f.dataset.id);
+  let o=d.oppId?byId(S.opps,d.oppId):null;
+  if(!o){o=nuevaOpp(d,{companyId:l.companyId,siteId:l.siteId||'',ownerId:l.ownerId||S.currentUser,contactIds:l.contactId?[l.contactId]:[],services:l.service?[l.service]:[],need:l.problem||''});if(typeof o==='string')return setErr(f,o)}
+  l.cmNote=(d.note||'').trim();l.cmAt=todayIso;setLeadStage(l,'Oportunidad creada');markTargetOpp(l.companyId);
+  if(!byId(S.opps,o.id)){S.opps.push(o);audit(o.code,'Creación','',o.name)}
+  linkLeadOpp(l,o);
+  save();closeModal();render();openEntity('opp',o.id);toast(d.oppId?`${esc(l.code)} quedó ligado a ${esc(o.code)}.`:`Oportunidad ${esc(o.code)} creada desde ${esc(l.code)}.`)},
  linkLead:(d,f)=>{const l=byId(S.leads,f.dataset.id),o=byId(S.opps,d.oppId);if(!o)return;linkLeadOpp(l,o);if(l.stage!=='Oportunidad creada')setLeadStage(l,'Oportunidad creada');save();closeModal();render();openEntity('opp',o.id);toast(`${esc(l.code)} quedó ligado a ${esc(o.code)}.`)},
  disq:(d,f)=>{const l=byId(S.leads,f.dataset.id);const ant=l.stage;if(d.nurture){l.stage='Nurturing';l.nextAction='Recontactar';l.nextActionDate=d.recontact||addDays(90)}else l.stage='No calificado';l.stageAt=todayIso;l.disqReason=d.reason;l.disqComment=d.comment;audit(leadRef(l),'Etapa',ant,l.stage+' ('+d.reason+')');save();closeModal();render();toast(l.stage==='Nurturing'?`Prospecto en nurturing, recontacto el ${fmtDate(l.nextActionDate)}.`:'Prospecto marcado como no calificado.')},
  company:(d,f)=>{
@@ -2592,11 +2713,17 @@ const SUBMITS={
   if(f.dataset.id){const k=byId(S.contacts,f.dataset.id);Object.assign(k,d);audit('Contacto '+k.firstName+' '+k.lastName,'Edición','','');save();closeModal();render();toast('Contacto actualizado.')}
   else{const k={id:uid('k'),...d,createdAt:todayIso};S.contacts.push(k);audit('Contacto '+k.firstName+' '+k.lastName,'Creación','','');save();
    if(f.dataset.stacked&&MSTACK.length){popModal({contactId:k.id});render();toast('Contacto creado'+(contactoEfectivo(k)?'.':', pero sin correo, teléfono ni LinkedIn: no sirve todavía para un prospecto.'))}else{closeModal();render();toast('Contacto creado.')}}},
- newOpp:(d,f)=>{const ce=checkCM(d.code);if(ce)return setErr(f,ce);const o={id:uid('o'),code:d.code.trim().toUpperCase(),name:d.name,companyId:d.companyId,siteId:'',ownerId:d.ownerId,stage:d.stage,prob:stageOf(d.stage).p,currency:d.currency,oneTime:num(d.oneTime),monthly:num(d.monthly),term:num(d.term),closeDate:d.closeDate,nextAction:d.nextAction,nextActionDate:d.nextActionDate,stageEnteredAt:todayIso,createdAt:todayIso,status:'abierta',contactIds:[],need:'',pain:'',competitors:'',currentProvider:'',strategy:'',risks:'',probReason:'',history:[],services:[]};
-  if(!(tcv(o)>0))return setErr(f,'Ingresa al menos un monto: único, o mensual con plazo en meses.');
-  if(d.closeDate<todayIso)return setErr(f,'La fecha de cierre no puede estar en el pasado.');
-  S.opps.push(o);markTargetOpp(o.companyId);audit(o.code,'Creación','',o.name);save();closeModal();render();openEntity('opp',o.id);toast('Oportunidad creada.')},
- oppCode:(d,f)=>{const o=byId(S.opps,f.dataset.id);if(enExcel(o))return;const c=String(d.code||'').trim().toUpperCase();if(c===String(o.code).toUpperCase())return;const e=checkCM(c,o.id);if(e)return setErr(f,e);audit(o.code,'Código',o.code,c);o.code=c;save();render();toast('Código actualizado.')},
+ newOpp:(d,f)=>{const o=nuevaOpp(d,{companyId:d.companyId,ownerId:d.ownerId});if(typeof o==='string')return setErr(f,o);
+  S.opps.push(o);markTargetOpp(o.companyId);audit(o.code,'Creación','',o.name);save();closeModal();render();openEntity('opp',o.id);toast(`Oportunidad ${esc(o.code)} creada.`)},
+ oppEdit:(d,f)=>{const o=byId(S.opps,f.dataset.id);if(!oppCRM(o))return closeModal();
+  const n={name:String(d.name||'').trim(),tipo:d.tipo||'',currency:d.currency,oneTime:num(d.oneTime),monthly:num(d.monthly),term:num(d.term),prob:Math.min(100,Math.max(0,num(d.prob))),closeDate:d.closeDate,ownerId:d.ownerId||o.ownerId};
+  if(!n.name)return setErr(f,'Falta el nombre de la oportunidad.');
+  if(!(tcv(Object.assign({},o,n))>0))return setErr(f,'Ingresa al menos un monto: único, o mensual con plazo en meses.');
+  if(!n.closeDate)return setErr(f,'Falta la fecha estimada de cierre.');
+  const L={name:'Nombre',tipo:'Tipo de negocio',currency:'Moneda',oneTime:'Monto único',monthly:'Monto mensual',term:'Plazo',prob:'Probabilidad',closeDate:'Cierre estimado',ownerId:'Responsable'};
+  Object.keys(n).forEach(k=>{if(String(o[k]??'')!==String(n[k])){audit(o.code,L[k],k==='ownerId'?uname(o[k]):o[k],k==='ownerId'?uname(n[k]):n[k]);o[k]=n[k]}});
+  if(d.stage&&d.stage!==o.stage&&o.status==='abierta'){if(d.stage==='adjudicada'){save();closeModal();render();return openWon(o.id)}setStage(o,d.stage);o.prob=Math.min(100,Math.max(0,num(d.prob)))||stageOf(d.stage).p}
+  save();closeModal();render();openEntity('opp',o.id);toast('Oportunidad actualizada.')},
  recepcion:(d,f)=>{const o=byId(S.opps,f.dataset.opp);if(!o){closeModal();return}
   const docs=[...f.querySelectorAll('input[name=docs]:checked')].map(x=>x.value);
   if(!REC_STATUS.includes(d.status))return setErr(f,'Elige el estado.');
@@ -2987,7 +3114,7 @@ document.addEventListener('submit',e=>{const f=e.target;if(!f.dataset.form)retur
 document.addEventListener('change',e=>{const t=e.target;
  if(t.dataset.filter!==undefined){UI[t.dataset.filter]=t.value;render();return}
  if(t.dataset.targetStatus){const[pid,cid]=t.dataset.targetStatus.split('|');const p=byId(S.plans,pid);const tg=p.targets.find(x=>x.companyId===cid);const old=tg.status;tg.status=t.value;if(t.value==='Descartado'&&tg.leadId)S.tasks.filter(x=>x.planId===p.id&&x.entityId===tg.leadId&&isOpenTask(x)).forEach(x=>x.status='Cancelada');audit(p.name,'Estado de '+cname(cid),old,t.value);save();render();toast(t.value==='Descartado'?'Empresa descartada. Sus tareas pendientes del plan se cancelaron.':'Estado actualizado.');return}
- if(t.hasAttribute('data-funnel')&&t.files&&t.files[0]){const f=t.files[0];t.value='';fxImportFile(f);return}
+ // CRM FS: las oportunidades se crean solo en el CRM. La importación del funnel desde Excel (fxImportFile) quedó sin entrada en la pantalla.
  if(t.hasAttribute('data-meta')&&t.files&&t.files[0]){const f=t.files[0];t.value='';metaImportFile(f);return}
  if(t.hasAttribute('data-restore')&&t.files&&t.files[0]){const rd=new FileReader();rd.onload=()=>{try{const data=JSON.parse(rd.result);if(!Array.isArray(data.companies)||!Array.isArray(data.opps))throw new Error('formato');S=data;migrate();marcarReemplazo();save();closeDrawer();render();toast('Respaldo restaurado.')}catch(e){toast('El archivo no es un respaldo válido del CRM.')}};rd.readAsText(t.files[0]);return}
  if((t.id==='userSel'||t.dataset.actionChange==='user')&&STORE.mode==='servidor'&&SES.yo)return;   // con sesión, la persona la fija el servidor

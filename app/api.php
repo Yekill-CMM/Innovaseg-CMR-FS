@@ -11,11 +11,17 @@
    Datos (siempre con los permisos de la persona: permisos.php):
    - GET  ?accion=leer           lo que la persona puede ver {rev, savedAt, data, yo, usuarios}
    - GET  ?accion=rev            solo la revisión actual {rev, savedAt}
-   - POST                        guarda {baseRev, data}: la copia de la pantalla se compara con lo que la
-                                 persona veía y cada alta, cambio y baja se revisa antes de aplicarla sobre
-                                 los datos completos. Responde {rev} (y {avisos, data} si algo no se aplicó).
-                                 Si baseRev no coincide con la revisión del servidor (otra persona u otro
-                                 dispositivo guardó antes), responde 409 con la vista actual y no escribe nada.
+   - POST {baseRev, cambios}     guardado registro por registro (guardado.php): solo lo que cambió, con la
+                                 versión que tenía la pantalla de cada registro. Lo que nadie más tocó se aplica;
+                                 si otra persona cambió otros campos del mismo registro, se juntan; si cambió los
+                                 mismos, queda la del servidor y vuelve en {conflictos}. Después pasa por los
+                                 permisos de siempre. Responde {rev, registros, doc} con la versión final de lo
+                                 que tocó, o {rev, data} con la vista completa si otra persona guardó entremedio,
+                                 hubo conflictos o avisos. Las oportunidades nuevas reciben su código OP aquí.
+   - POST {baseRev, data}        copia completa (iniciar, restaurar o subir cambios hechos sin conexión): se
+                                 compara con lo que la persona veía y cada alta, cambio y baja se revisa antes
+                                 de aplicarla. Si baseRev no coincide con la revisión del servidor responde 409
+                                 con la vista actual y no escribe nada. Responde {rev, data} (y {avisos}).
    - POST ?accion=ajustes        guarda {ajustes} (parámetros de configuración; solo administrador)
    - GET  ?accion=historial | eliminados, POST ?accion=restaurar: dentro del alcance de la persona
    - GET  ?accion=agente, POST ?accion=agente-escribir: para un programa con la clave del agente
@@ -129,7 +135,8 @@ function resumenAgente($actual, $ajustes) {
         if (!$ultima && !empty($o->fx->pres)) $ultima = $o->fx->pres;
         $sa = $dias($ultima ?: $o->createdAt); $de = $dias($o->stageEnteredAt);
         // Plazos por tipo de negocio (Configuración > Plazos por tipo); lo no definido toma los generales
-        $pl = (!empty($o->fx->tipo) && isset($cfg['plazos'][$o->fx->tipo]) && is_array($cfg['plazos'][$o->fx->tipo])) ? $cfg['plazos'][$o->fx->tipo] : [];
+        $tipo = !empty($o->tipo) ? $o->tipo : (!empty($o->fx->tipo) ? $o->fx->tipo : '');   // en el CRM FS lo elige quien crea la oportunidad
+        $pl = ($tipo !== '' && isset($cfg['plazos'][$tipo]) && is_array($cfg['plazos'][$tipo])) ? $cfg['plazos'][$tipo] : [];
         $sinAct = ['warn' => !empty($pl['warn']) ? $pl['warn'] : $sinAct0['warn'], 'risk' => !empty($pl['risk']) ? $pl['risk'] : $sinAct0['risk']];
         $estancada = !empty($pl['stalled']) ? $pl['stalled'] : $estancada0;
         $alertas = [];
@@ -141,9 +148,9 @@ function resumenAgente($actual, $ajustes) {
         elseif ($pt->due < $hoy) $alertas[] = 'tarea vencida';
         if (!empty($o->fx->ausente)) $alertas[] = 'no vino en el funnel desde ' . $o->fx->ausente . ' (confirmar con Gerencia si sigue vigente)';
         $abiertas[] = [
-            'codigo' => $o->code, 'en_excel' => !empty($o->fx), 'nombre' => $o->name, 'titulo_funnel' => isset($o->fx->title) ? $o->fx->title : null, 'empresa' => isset($empresas[$o->companyId]) ? $empresas[$o->companyId] : '',
+            'codigo' => $o->code, 'en_excel' => !empty($o->fx), 'en_funnel' => !empty($o->fx) || !empty($o->crm), 'nombre' => $o->name, 'titulo_funnel' => isset($o->fx->title) ? $o->fx->title : null, 'empresa' => isset($empresas[$o->companyId]) ? $empresas[$o->companyId] : '',
             'etapa' => isset($etapas[$o->stage]) ? $etapas[$o->stage] : $o->stage, 'probabilidad' => $o->prob, 'moneda' => $o->currency,
-            'tipo_negocio' => isset($o->fx->tipo) ? $o->fx->tipo : null, 'valor_unico' => $o->oneTime, 'mensual' => $o->monthly, 'plazo_meses' => $o->term,
+            'tipo_negocio' => $tipo !== '' ? $tipo : null, 'valor_unico' => $o->oneTime, 'mensual' => $o->monthly, 'plazo_meses' => $o->term,
             'valor_total' => $valor($o), 'plazo_sin_gestion' => $sinAct['warn'],
             'fecha_cierre' => $o->closeDate, 'proxima_tarea' => $pt ? $pt->title : null, 'fecha_proxima_tarea' => $pt ? $pt->due : null,
             'dias_en_etapa' => $de, 'ultima_actividad' => $ultima, 'dias_sin_actividad' => $sa, 'alertas' => $alertas,
@@ -238,7 +245,7 @@ function resumenAgente($actual, $ajustes) {
     usort($tareas, function ($x, $y) { return strcmp($x['vence'], $y['vence']); });
     return [
         'hoy' => $hoy, 'guardado' => $actual->savedAt, 'parametros' => $cfg,
-        'totales' => ['abiertas' => count($abiertas), 'pipeline' => array_sum(array_column(array_filter($abiertas, function ($o) { return $o['en_excel']; }), 'valor_total')),
+        'totales' => ['abiertas' => count($abiertas), 'pipeline' => array_sum(array_column(array_filter($abiertas, function ($o) { return $o['en_funnel']; }), 'valor_total')),
                       'sin_tarea_pendiente' => count(array_filter($abiertas, function ($o) { return in_array('sin tarea pendiente', $o['alertas'], true); })),
                       'prospectos_abiertos' => count($prospectos)],
         'oportunidades_abiertas' => $abiertas, 'prospectos_abiertos' => $prospectos, 'empresas_buscar_contacto' => $buscar, 'planes' => $planes, 'ofertas_vigentes' => $ofertas, 'tareas_pendientes' => $tareas,
@@ -309,7 +316,7 @@ function etapaId($v, $ETAPAS) {
                       todas las verticales; la vertical se usa para la empresa si se crea); si el plan
                       no existe lo crea en Borrador (el guion se completa al abrir el CRM). Si la empresa ya
                       está en el plan, no hace nada. No crea prospectos ni tareas: eso ocurre al activar el plan.
-   Las oportunidades vienen del funnel oficial de First Security: el agente no las crea
+   Las oportunidades se crean y gestionan en la pantalla del CRM (con su código OP): el agente no las crea
    ni cambia su nombre, etapa, probabilidad, montos o fecha de cierre.
    Todo o nada: si una op es inválida no se guarda ninguna. */
 // Asigna código PR-AAAA-NNNN a los prospectos que aún no lo tienen (misma regla que index.html, versión 4 de datos)
@@ -434,7 +441,7 @@ function aplicarAgente($d, $ops) {
     };
     $etapaProspecto = function ($v, $n) use ($ETAPAS_PROSPECTO) {
         foreach ($ETAPAS_PROSPECTO as $E) if (normTxt($E) === normTxt($v)) {
-            if ($E === 'Oportunidad creada') throw new Exception("Cambio $n: las oportunidades vienen del funnel; Joan no marca prospectos como «Oportunidad creada».");
+            if ($E === 'Oportunidad creada') throw new Exception("Cambio $n: las oportunidades se crean en la pantalla del CRM; Joan no marca prospectos como «Oportunidad creada».");
             return $E;
         }
         throw new Exception("Cambio $n: etapa de prospecto no válida. Usa: " . implode(', ', array_diff($ETAPAS_PROSPECTO, ['Oportunidad creada'])) . '.');
@@ -661,7 +668,7 @@ function aplicarAgente($d, $ops) {
             break;
         case 'oportunidad':
         case 'actualizar_oportunidad':
-            throw new Exception("Cambio $n: las oportunidades vienen del funnel de First Security. Joan no las crea ni cambia su nombre, etapa, probabilidad, montos o fecha de cierre; puede registrar actividades, tareas y próximas acciones, o crear un prospecto.");
+            throw new Exception("Cambio $n: Joan todavía no crea oportunidades ni cambia su nombre, etapa, probabilidad, montos o fecha de cierre; eso se hace en la pantalla del CRM. Puede registrar actividades, tareas y próximas acciones, o crear un prospecto.");
         default:
             throw new Exception("Cambio $n: tipo «{$op->tipo}» no permitido. Usa actividad, proxima_accion, tarea, completar_tarea, empresa, contacto, prospecto, actualizar_prospecto o plan_objetivo.");
         }
@@ -787,6 +794,7 @@ function escribirDatos($data, $rev, $savedAt, $origen, $extra = []) {
    los permisos de su rol y equipo se aplican en cada lectura y escritura (permisos.php). */
 require __DIR__ . '/cuentas.php';
 require __DIR__ . '/permisos.php';
+require __DIR__ . '/guardado.php';
 /* Origen de la petición:
    - local:      desde el mismo servidor (Joan en joansvr), sin pasar por ningún proxy
    - tailnet:    desde tu red Tailscale. Tailscale Serve agrega Tailscale-User-Login
@@ -1061,6 +1069,19 @@ function vistaDe($doc) {
     return $v;
 }
 
+// Conflictos: quién y cuándo cambió por última vez cada registro (con la base; con el JSON no hay ese dato)
+function guardQuien($conf) {
+    global $PDO, $CTX;
+    foreach ($conf as &$c) {
+        $c['quien'] = ''; $c['en'] = '';
+        if (!$PDO) continue;
+        $st = $PDO->prepare('SELECT usuario, en, origen FROM cambios WHERE tabla = ? AND registro = ? ORDER BY n DESC LIMIT 1'); $st->execute([$c['t'], $c['id']]);
+        $f = $st->fetch(PDO::FETCH_ASSOC);
+        if ($f) { $c['quien'] = isset($CTX->dir[$f['usuario']]) ? $CTX->dir[$f['usuario']]->name : ($f['origen'] === 'Joan' ? 'Joan' : ''); $c['en'] = $f['en']; }
+    }
+    return $conf;
+}
+
 /* ---------- Lectura ---------- */
 if ($metodo === 'GET') {
     if ($accion === 'historial') {   // historial completo de un registro que la persona puede ver
@@ -1111,7 +1132,7 @@ if ($metodo === 'POST') {
         $actual = leerActual();
         if (!$actual->data) { flock($lock, LOCK_UN); responder(409, ['error' => 'El CRM aún no tiene datos.']); }
         $vista = permVista($actual->data, $CTX);
-        try { $hecho = aplicarAgente($vista, $cuerpo->ops); $nuevo = permAplicar($actual->data, $vista, $CTX); }
+        try { $hecho = aplicarAgente($vista, $cuerpo->ops); $nuevo = permAplicar($actual->data, $vista, $CTX); guardCodigos($actual->data, $nuevo, $CTX); }
         catch (Exception $e) { flock($lock, LOCK_UN); responder(400, ['error' => $e->getMessage()]); }
         if ($CTX->avisos) { flock($lock, LOCK_UN); responder(403, ['error' => implode(' ', $CTX->avisos)]); }
         $nrev = (int) $actual->rev + 1;
@@ -1156,6 +1177,40 @@ if ($metodo === 'POST') {
     }
 
     if ($accion !== 'leer' && $accion !== '') responder(400, ['error' => 'Acción no reconocida.']);
+
+    // Guardado registro por registro (guardado.php): solo lo que cambió, mezclado con lo que guardaron otras personas
+    if (is_object($cuerpo) && isset($cuerpo->cambios) && !isset($cuerpo->data)) {
+        $lock = fopen($DIR_DATOS . '/.lock', 'c');
+        if (!$lock || !flock($lock, LOCK_EX)) responder(500, ['error' => 'No se pudo bloquear el archivo de datos.']);
+        $actual = leerActual();
+        if ($actual->data === null) { flock($lock, LOCK_UN); responder(409, ['error' => 'El CRM aún no tiene datos: el administrador debe iniciarlo.', 'rev' => (int) $actual->rev, 'data' => null]); }
+        $base = isset($cuerpo->baseRev) ? (int) $cuerpo->baseRev : -1;
+        try {
+            list($vMezcla, $conflictos, $tocados) = guardMezclar(permVista($actual->data, $CTX, false), $cuerpo->cambios, $CTX);
+            $nuevo = permAplicar($actual->data, $vMezcla, $CTX);
+        } catch (Exception $e) {
+            if (!($e instanceof GuardRechazo) && !($e instanceof PermRechazo)) throw $e;
+            flock($lock, LOCK_UN); $v = vistaDe($actual); $v->error = $e->getMessage(); $v->rechazo = true; responder(422, $v);
+        }
+        $avisos = $CTX->avisos;
+        list($avCod, $renombres) = guardCodigos($actual->data, $nuevo, $CTX);
+        $avisos = array_merge($avisos, $avCod);
+        list($errBaja, $extra) = validarBajas($actual->data, $nuevo);
+        if ($errBaja !== '') { flock($lock, LOCK_UN); $v = vistaDe($actual); $v->error = $errBaja; $v->rechazo = true; responder(422, $v); }
+        $nrev = (int) $actual->rev + 1;
+        $err = escribirDatos($nuevo, $nrev, isset($nuevo->savedAt) ? $nuevo->savedAt : 0, 'pantalla', $extra);
+        flock($lock, LOCK_UN);
+        if ($err) responder(500, ['error' => $err]);
+        $vf = permVista($nuevo, $CTX);
+        $r = ['rev' => $nrev];
+        if ($conflictos) $r['conflictos'] = guardQuien($conflictos);
+        if ($avisos) $r['avisos'] = $avisos;
+        if ($renombres) $r['codigos'] = $renombres;
+        // Si alguien más guardó entremedio (o algo no se aplicó), la pantalla recibe su vista completa; si no, solo lo que tocó
+        if ($base !== (int) $actual->rev || $conflictos || $avisos) $r['data'] = $vf; else $r += guardDevolver($vf, $tocados);
+        responder(200, $r);
+    }
+
     if (!is_object($cuerpo) || !isset($cuerpo->data) || !is_object($cuerpo->data)
         || !isset($cuerpo->data->companies) || !is_array($cuerpo->data->companies)) {
         responder(400, ['error' => 'Los datos enviados no tienen el formato del CRM.']);
@@ -1183,6 +1238,8 @@ if ($metodo === 'POST') {
         catch (PermRechazo $e) { flock($lock, LOCK_UN); $v = vistaDe($actual); $v->error = $e->getMessage(); $v->rechazo = true; responder(422, $v); }
     }
     $avisos = $CTX->avisos;
+    $renombres = [];
+    if (!$reemplazo && $actual->data !== null) { list($avCod, $renombres) = guardCodigos($actual->data, $nuevo, $CTX); $avisos = array_merge($avisos, $avCod); }
 
     // Empresas y contactos que dejan de venir: solo sin historial o fusionados (ver validarBajas)
     $extra = [];
@@ -1199,8 +1256,12 @@ if ($metodo === 'POST') {
     $err = escribirDatos($nuevo, $nrev, isset($cuerpo->data->savedAt) ? $cuerpo->data->savedAt : 0, 'pantalla', $extra);
     flock($lock, LOCK_UN);
     if ($err) responder(500, ['error' => $err]);
-    if ($avisos) responder(200, ['rev' => $nrev, 'avisos' => $avisos, 'data' => permVista($nuevo, $CTX)]);   // la pantalla toma su vista: lo no permitido no quedó
-    responder(200, ['rev' => $nrev]);
+    // La copia completa se usa solo al iniciar, al restaurar o al subir cambios hechos sin conexión: la pantalla
+    // recibe siempre su vista como quedó (con lo que puso el servidor: códigos, trazabilidad, lo no permitido fuera)
+    $r = ['rev' => $nrev, 'data' => permVista($nuevo, $CTX)];
+    if ($avisos) $r['avisos'] = $avisos;
+    if ($renombres) $r['codigos'] = $renombres;
+    responder(200, $r);
 }
 
 responder(405, ['error' => 'Método no permitido.']);

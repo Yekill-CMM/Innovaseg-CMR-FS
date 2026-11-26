@@ -44,10 +44,30 @@ Una actividad o tarea de otra persona sobre un registro que ves (por ejemplo, la
 subgerente en tu oportunidad) también se ve, pero no se cambia. La meta del Excel de presupuesto
 y el detalle del último funnel importado los ven solo el gerente y el administrador.
 
-La pantalla sigue enviando su copia completa: el servidor la compara con lo que esa persona
-veía, revisa cada alta, cambio y baja y la aplica sobre los datos completos sin tocar lo
-que no ve. Lo no permitido no se aplica y vuelve como aviso. Cada fila de `cambios` guarda la
-persona que hizo el cambio.
+Lo no permitido no se aplica y vuelve como aviso. Cada fila de `cambios` guarda la persona que
+hizo el cambio, y el historial de cada registro lo muestra en la pantalla.
+
+## Guardado registro por registro
+
+Varias personas pueden trabajar a la vez sin pisarse (`app/guardado.php`). La pantalla manda solo
+los registros que cambió, cada uno con la versión que tenía. El servidor aplica lo que nadie más
+tocó; si otra persona cambió otros campos del mismo registro, junta los dos cambios; si cambió los
+mismos campos (o lo eliminó), queda la versión del servidor y la pantalla avisa quién y cuándo lo
+cambió. Todo pasa después por los mismos permisos. La copia completa queda solo para iniciar el
+CRM, restaurar un respaldo o subir cambios hechos sin conexión.
+
+## Oportunidades
+
+Se crean y gestionan en el CRM: con «Nueva oportunidad» o al convertir un prospecto. El código es
+automático, `OP-AAMMDD-NN` (fecha de creación y correlativo del día), y lo asigna el servidor, que
+ve todas las oportunidades: el que muestra la pantalla antes de guardar es provisional. El código
+no cambia después de creado. Quien la crea elige el tipo de negocio, que define los plazos de
+seguimiento y la línea de la meta de presupuesto.
+
+No entra nada por Excel: la pantalla ya no tiene «Importar funnel» y el servidor le pone código OP
+a toda oportunidad nueva. El funnel solo se exporta, en el formato del Excel de Gerencia (punto 5
+del plan). La meta del Excel de presupuesto se sigue cargando igual: es otra planilla y no trae
+oportunidades.
 
 ## Pruebas
 
