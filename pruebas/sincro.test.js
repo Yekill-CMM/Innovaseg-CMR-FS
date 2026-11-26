@@ -4,6 +4,10 @@ const fs=require('fs');const {JSDOM,VirtualConsole}=require('jsdom');
 const HTML=fs.readFileSync(process.argv[2],'utf8');let f=0;const ok=(c,m)=>{console.log((c?'  ✓ ':'  ✗ ')+m);if(!c)f++};
 const KEY='fs-crm-proto-v1';
 const espera=ms=>new Promise(r=>setTimeout(r,ms));
+// Lo que hace el servidor con un guardado registro por registro, sin conflictos (las reglas reales: guardado.test.php)
+const aplicarCambios=(d,c)=>{for(const r of c.registros||[]){if(!Array.isArray(d[r.t]))d[r.t]=[];const L=d[r.t];const i=L.findIndex(x=>String(x.id)===String(r.id));
+ if(r.despues===null){if(i>=0)L.splice(i,1);continue}if(i>=0){L[i]=r.despues;continue}const j=r.tras==null?-1:L.findIndex(x=>String(x.id)===String(r.tras));
+ if(r.tras==null)L.unshift(r.despues);else if(j>=0)L.splice(j+1,0,r.despues);else L.push(r.despues)}for(const x of c.doc||[])d[x.k]=x.despues;return d};
 
 // Datos base reales (sin automatizaciones, para que la prueba no dependa de ellas)
 function base(){
@@ -23,7 +27,7 @@ function abrir({local,localRev,pend,server,serverRev}){
    else if(m==='GET'&&/accion=rev/.test(q))j={rev:srv.rev};
    else if(m==='GET')st=404,j={};
    else if(m==='POST'&&!/accion=/.test(q)){const b=JSON.parse(o.body);srv.posts.push(b);
-    if(b.baseRev!==srv.rev){st=409;j={rev:srv.rev,savedAt:srv.data.savedAt,data:srv.data}}else{srv.rev++;srv.data=b.data;j={rev:srv.rev}}}
+    if(b.cambios){srv.rev++;aplicarCambios(srv.data,b.cambios);j={rev:srv.rev,registros:[],doc:{}}}else if(b.baseRev!==srv.rev){st=409;j={rev:srv.rev,savedAt:srv.data.savedAt,data:srv.data}}else{srv.rev++;srv.data=b.data;j={rev:srv.rev,data:srv.data}}}
    else j={ok:true};
    return{status:st,json:async()=>JSON.parse(JSON.stringify(j))}};
  }});
@@ -38,7 +42,7 @@ const nombres=S=>S.plans.map(p=>p.name).sort().join(',');
 
  console.log('Copia vieja sin cambios pendientes (caso iPhone)');
  let t=abrir({local:viejo,localRev:234,pend:false,server:nuevo,serverRev:237});await espera(1500);
- ok(t.srv.posts.every(p=>!p.data.plans.some(x=>x.id==='pm1')),'no sube la copia vieja al servidor');
+ ok(t.srv.posts.every(p=>!JSON.stringify(p).includes('pm1')),'no sube la copia vieja al servidor');
  ok(nombres(t.srv.data)==='Plan semana 47-26','el servidor conserva el plan semanal');
  ok(nombres(t.w.eval('S'))==='Plan semana 47-26','la pantalla muestra la versión del servidor');
  ok(!/Se cargó la versión del servidor/.test(t.w.document.querySelector('#modalLayer').textContent),'sin aviso: no había nada propio que perder');

@@ -1,5 +1,5 @@
-// Oportunidades: fuente única = Excel de Gerencia. 4 etapas, código CM, prospecto que reserva su CM y se vincula al importar,
-// datos comerciales en solo lectura, sin módulo de ofertas aparte.
+// Oportunidades: se crean en el CRM con código OP automático (y las del Excel de Gerencia siguen importándose y vinculándose).
+// 4 etapas, datos del Excel en solo lectura, sin módulo de ofertas aparte.
 // Uso: node oportunidades.test.js ../app/index.html
 const fs = require('fs');
 const { JSDOM, VirtualConsole } = require('jsdom');
@@ -32,26 +32,49 @@ ok(E(`S.audit.some(a=>a.entity==='CM-250314-01'&&/nueva política/.test(a.field)
 E('migrate()');
 ok(E(`byId(S.opps,'oV').history.length`) === 1, 'correr la migración dos veces no repite el cambio');
 
-console.log('2. Fuente única: el CRM no crea oportunidades');
+console.log('2. Oportunidades creadas en el CRM, con código OP automático');
 E(`location.hash='oportunidades';render()`);
-ok(!doc.querySelector('[data-action="newOpp"]'), 'no hay botón "Nueva oportunidad"');
-E(`ACTIONS.newOpp({})`);
-ok(/solo del Excel/.test(E('window.__toasts.slice(-1)[0]')), 'si se intenta, explica que vienen solo del Excel');
+ok(!!doc.querySelector('[data-action="newOpp"]'), 'hay botón "Nueva oportunidad"');
 const cols = [...doc.querySelectorAll('.kanban .col h2')].map(h => h.firstChild.textContent.trim());
 ok(JSON.stringify(cols) === JSON.stringify(['Pipeline', 'Upside', 'Forecast', 'Booking', 'Facturado']), 'Kanban con 4 etapas más Facturado: ' + cols.join(', '));
 const txt = doc.querySelector('.kanban').textContent;
 ok(/Oferta en desarrollo/.test(txt) && /Oferta entregada/.test(txt) && /Adjudicada verbalmente/.test(txt) && /Cerrada con contrato/.test(txt), 'cada columna dice qué significa');
 ok(/Antigua/.test(txt) && !/no viene en el Excel/.test(visible()), 'la oportunidad del Excel queda en Pipeline, sin avisos de pendientes');
-ok(!doc.querySelector('.kanban [draggable="true"]'), 'las tarjetas no se arrastran: la etapa viene del Excel');
+E(`ACTIONS.newOpp({})`);
+ok(!doc.querySelector('form[data-form="newOpp"] [name="code"]') && doc.querySelector('form[data-form="newOpp"] input[disabled]').value === 'OP-' + k + '-01', 'el código no se escribe: muestra el provisional OP-' + k + '-01');
+let err = enviar('form[data-form="newOpp"]', { companyId: 'cA', name: 'Sin monto', closeDate: E('addDays(30)'), nextAction: 'Llamar', nextActionDate: hoy });
+ok(/al menos un monto/.test(err), 'sin monto no se crea: «' + err + '»');
+const nOp = E('S.opps.length');
+err = enviar('form[data-form="newOpp"]', { companyId: 'cA', name: 'CCTV bodega ACME', monthly: '2000000', term: '24', closeDate: E('addDays(30)'), nextAction: 'Enviar propuesta', nextActionDate: hoy });
+const nueva = E(`JSON.parse(JSON.stringify(S.opps[S.opps.length-1]))`);
+ok(err === '' && E('S.opps.length') === nOp + 1 && nueva.code === 'OP-' + k + '-01' && nueva.crm === true && nueva.ownerId === 'u1', 'se crea con código OP-' + k + '-01, marca crm y la persona como responsable');
+ok(E(`enFunnel(byId(S.opps,'${nueva.id}'))`) && /CCTV bodega ACME/.test(doc.querySelector('.kanban').textContent), 'suma al funnel y aparece en el Kanban');
+ok(E(`S.audit.some(a=>a.entity==='${nueva.code}'&&a.field==='Creación')`), 'la creación queda en la auditoría');
+E(`openEntity('opp','${nueva.id}')`);
+ok(!!doc.querySelector('#drawerLayer [data-action="editOpp"]') && !doc.querySelector('#drawerLayer form[data-form="oppCode"]'), 'su ficha se puede editar, pero el código no');
+E(`ACTIONS.editOpp({id:'${nueva.id}'})`);
+err = enviar('form[data-form="oppEdit"]', { stage: 'seguimiento', prob: '60', monthly: '2500000' });
+const ed = E(`JSON.parse(JSON.stringify(byId(S.opps,'${nueva.id}')))`);
+ok(err === '' && ed.stage === 'seguimiento' && ed.prob === 60 && ed.monthly === 2500000 && ed.history.some(h => h.to === 'seguimiento'), 'editar cambia etapa, probabilidad y montos (con historial de etapa)');
+ok(E(`S.audit.some(a=>a.entity==='${nueva.code}'&&a.field==='Monto mensual'&&a.newV==='2500000')`), 'cada cambio queda en la auditoría');
+E(`ACTIONS.newOpp({})`);
+ok(doc.querySelector('form[data-form="newOpp"] input[disabled]').value === 'OP-' + k + '-02', 'la siguiente del día propone OP-' + k + '-02');
+E(`closeModal();closeDrawer();S.opps=S.opps.filter(o=>o.id!=='${nueva.id}')`);
+ok(!E('ACTIONS.editOpp({id:"oV"})') && !doc.querySelector('form[data-form="oppEdit"]'), 'la del Excel no se edita aquí (viene del Excel)');
 
-console.log('3. Prospecto que pasa a oferta: no crea código ni oportunidad, espera el Excel');
+console.log('3. Prospecto que pasa a oferta: crea la oportunidad con su código OP');
 E(`S.leads.push({id:'lP',code:'PR-2026-0001',name:'CCTV Parque Taltal',companyId:'cA',contactId:'',source:'Referido',stage:'Levantamiento',potential:'Alto',problem:'Robos en el parque',service:'CCTV',ownerId:'u1',nextAction:'x',nextActionDate:todayIso,vars:{},createdAt:todayIso});
   ACTIONS.convertLead({id:'lP'})`);
-ok(!doc.querySelector('form[data-form="convert"] [name="code"]'), 'no pide ni genera código CM');
+ok(!doc.querySelector('form[data-form="convert"] [name="code"]') && doc.querySelector('form[data-form="convert"] [name="name"]').value === 'CCTV Parque Taltal', 'no pide código y propone el nombre del prospecto');
 const n0 = E('S.opps.length');
-let err = enviar('form[data-form="convert"]', { note: 'Oferta a cargo de ingeniería' });
-ok(err === '' && E(`byId(S.leads,'lP').stage`) === 'Oportunidad creada' && E('S.opps.length') === n0, 'el prospecto pasa a "Oportunidad creada" sin crear oportunidad');
-ok(/Esperando la oportunidad en el Excel/.test(doc.querySelector('#drawerLayer').textContent) && doc.querySelector('#drawerLayer [data-action="linkLead"]'), 'la ficha del prospecto dice que espera el Excel y ofrece vincular');
+err = enviar('form[data-form="convert"]', { note: 'Oferta a cargo de ingeniería', oneTime: '45000000', closeDate: E('addDays(40)') });
+const dl = E(`JSON.parse(JSON.stringify(S.opps[S.opps.length-1]))`);
+ok(err === '' && E(`byId(S.leads,'lP').stage`) === 'Oportunidad creada' && E('S.opps.length') === n0 + 1 && dl.leadId === 'lP' && E(`byId(S.leads,'lP').oppId`) === dl.id, 'el prospecto pasa a "Oportunidad creada" y queda ligado a la oportunidad nueva');
+ok(/^OP-\d{6}-\d{2}$/.test(dl.code) && dl.crm && dl.need === 'Robos en el parque' && dl.services.includes('CCTV'), 'la oportunidad trae código OP, necesidad y servicio del prospecto');
+ok(doc.querySelector('#drawerLayer').textContent.includes(dl.code + ', oportunidad'), 'se abre la oportunidad creada');
+// Para lo que sigue: un prospecto antiguo que quedó esperando el Excel (antes de esta regla)
+E(`closeDrawer();S.opps=S.opps.filter(o=>o.id!=='${dl.id}');byId(S.leads,'lP').oppId='';openEntity('lead','lP')`);
+ok(/Esperando la oportunidad en el Excel/.test(doc.querySelector('#drawerLayer').textContent) && doc.querySelector('#drawerLayer [data-action="linkLead"]'), 'un prospecto antiguo que espera el Excel todavía se puede vincular');
 E('closeDrawer()');
 
 console.log('4. El Excel trae la oferta: se vincula desde la ficha del prospecto');

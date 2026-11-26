@@ -11,7 +11,7 @@ $CAB = "<?php exit; ?>\n";
 // Copia del CRM en una carpeta temporal
 $T = sys_get_temp_dir() . '/crm-almacen-' . getmypid();
 @mkdir("$T/app/datos", 0777, true); @mkdir("$T/local", 0777, true);
-foreach (['index.html', 'api.php', 'almacen.php', 'cuentas.php', 'permisos.php'] as $f) copy("$APP/$f", "$T/app/$f");
+foreach (['index.html', 'api.php', 'almacen.php', 'cuentas.php', 'permisos.php', 'guardado.php'] as $f) copy("$APP/$f", "$T/app/$f");
 require "$APP/cuentas.php"; require __DIR__ . '/sesion-prueba.php';
 copy(dirname($APP) . '/local/router.php', "$T/local/router.php");
 $CLAVE_AG = str_repeat('a', 24);
