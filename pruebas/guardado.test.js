@@ -63,7 +63,7 @@ function abrir(data){
  t.E('closeModal()');
  t.srv.responder=(b,vista)=>{t.srv.rev++;const o=b.cambios.registros.find(r=>r.t==='opps').despues;const fin=Object.assign({},o,{code:'OP-'+k+'-03'});t.srv.data.opps.push(fin);
   return{rev:t.srv.rev,codigos:{[o.code]:fin.code},registros:b.cambios.registros.map(r=>({t:r.t,id:r.id,datos:r.t==='opps'?fin:Object.assign({},r.despues,{entity:fin.code})})),doc:{seq:Object.assign({},t.srv.data.seq,{opUlt:fin.code})}}};
- t.E(`(()=>{const o=nuevaOpp({name:'Control de acceso',oneTime:'3000000',closeDate:addDays(20),nextAction:'x',nextActionDate:todayIso},{companyId:'C1'});S.opps.push(o);audit(o.code,'Creación','',o.name);save();window.__nueva=o.id})()`);await espera(1200);
+ t.E(`(()=>{const o=nuevaOpp({name:'Control de acceso',tipo:'Seg. Electrónica',oneTime:'3000000',closeDate:addDays(20),nextAction:'x',nextActionDate:todayIso},{companyId:'C1'});S.opps.push(o);audit(o.code,'Creación','',o.name);save();window.__nueva=o.id})()`);await espera(1200);
  ok(t.E('byId(S.opps,__nueva).code')==='OP-'+k+'-03','la pantalla toma el código que asignó el servidor');
  ok(t.E('STORE.base.opps.find(o=>o.id===__nueva).code')==='OP-'+k+'-03'&&t.E('S.seq.opUlt')==='OP-'+k+'-03','y lo deja en su base (el próximo provisional parte de ahí)');
  t.E(`byId(S.opps,__nueva).prob=70;save()`);await espera(1200);

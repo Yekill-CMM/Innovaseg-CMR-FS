@@ -20,9 +20,8 @@
    - Oportunidades: OP-AAMMDD-NN (fecha de creación y correlativo del día). El código que
      trae la pantalla es provisional: el servidor pone el definitivo y lo corrige también en
      la auditoría, tareas y actividades nuevas que lo mencionan. El código de una oportunidad
-     no cambia después de creada.
-     Excepción: gerente y administrador pueden traer un código que no sea OP (la carga
-     inicial del funnel vigente, con sus códigos CM del Excel), si no está repetido.
+     no cambia después de creada. En el CRM FS no entra nada por Excel: toda oportunidad
+     nueva recibe su OP, venga con el código que venga.
    - Prospectos: si dos personas crean a la vez el mismo PR-AAAA-NNNN, el segundo recibe
      el siguiente número libre.
    ========================================================================= */
@@ -162,8 +161,6 @@ function guardCodigos($full, $nuevo, $ctx) {
             continue;
         }
         $c = strtoupper(trim(permTxt($o, 'code')));
-        $propio = $c !== '' && !preg_match(GUARD_OP_RE, $c) && $ctx->alc === null && !isset($usados[$c]);   // carga del funnel vigente (gerente o administrador)
-        if ($propio) { $o->code = $c; $usados[$c] = 1; continue; }
         $def = guardCodigoOP($usados);
         if ($c !== '' && $c !== $def) $ren[permTxt($o, 'code')] = $def;
         $o->code = $def; $o->crm = true; $usados[$def] = 1; $ult = $def;

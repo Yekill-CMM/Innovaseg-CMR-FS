@@ -61,8 +61,13 @@ CRM, restaurar un respaldo o subir cambios hechos sin conexión.
 Se crean y gestionan en el CRM: con «Nueva oportunidad» o al convertir un prospecto. El código es
 automático, `OP-AAMMDD-NN` (fecha de creación y correlativo del día), y lo asigna el servidor, que
 ve todas las oportunidades: el que muestra la pantalla antes de guardar es provisional. El código
-no cambia después de creado. Las que vienen del Excel de Gerencia conservan su código CM y, por
-ahora, se siguen actualizando con la importación.
+no cambia después de creado. Quien la crea elige el tipo de negocio, que define los plazos de
+seguimiento y la línea de la meta de presupuesto.
+
+No entra nada por Excel: la pantalla ya no tiene «Importar funnel» y el servidor le pone código OP
+a toda oportunidad nueva. El funnel solo se exporta, en el formato del Excel de Gerencia (punto 5
+del plan). La meta del Excel de presupuesto se sigue cargando igual: es otra planilla y no trae
+oportunidades.
 
 ## Pruebas
 

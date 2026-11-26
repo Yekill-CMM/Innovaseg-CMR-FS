@@ -9,7 +9,7 @@ npm test
 ```
 
 - `config.test.js`: la configuración por defecto de `app/index.html` es igual a `config/config-crm.default.json`, una instalación nueva y la demo parten con esos valores y lo que se cambia en Configuración manda sobre ellos.
-- `importador.test.js`: importa varios funnels seguidos y verifica que nada se borre, que las oportunidades ausentes queden marcadas, que la marca se quite sola cuando vuelven y que las oportunidades creadas a mano no se toquen. Al final deja un archivo de datos de prueba en la carpeta temporal.
+- `importador.test.js`: (el importador del funnel quedó sin entrada en la pantalla: en el CRM FS no entra nada por Excel; la prueba sigue mientras el código exista) importa varios funnels seguidos y verifica que nada se borre, que las oportunidades ausentes queden marcadas, que la marca se quite sola cuando vuelven y que las oportunidades creadas a mano no se toquen. Al final deja un archivo de datos de prueba en la carpeta temporal.
 - `pantallas.test.js`: genera la vista previa de importación, el Kanban, la ficha y Hoy, y revisa los avisos y que no haya errores de JavaScript.
 - `sincro.test.js`: al abrir, una copia vieja del navegador no pisa lo que hay en el servidor; solo se suben cambios pendientes hechos sobre la misma revisión.
 - `contacto.test.js`: contacto efectivo (correo, teléfono o LinkedIn): activar un plan solo crea prospectos con contacto, el resto queda en «Buscar contacto» y pasa solo al encontrarlo; devolución de prospectos sin contacto a su plan.

@@ -135,7 +135,8 @@ function resumenAgente($actual, $ajustes) {
         if (!$ultima && !empty($o->fx->pres)) $ultima = $o->fx->pres;
         $sa = $dias($ultima ?: $o->createdAt); $de = $dias($o->stageEnteredAt);
         // Plazos por tipo de negocio (Configuración > Plazos por tipo); lo no definido toma los generales
-        $pl = (!empty($o->fx->tipo) && isset($cfg['plazos'][$o->fx->tipo]) && is_array($cfg['plazos'][$o->fx->tipo])) ? $cfg['plazos'][$o->fx->tipo] : [];
+        $tipo = !empty($o->tipo) ? $o->tipo : (!empty($o->fx->tipo) ? $o->fx->tipo : '');   // en el CRM FS lo elige quien crea la oportunidad
+        $pl = ($tipo !== '' && isset($cfg['plazos'][$tipo]) && is_array($cfg['plazos'][$tipo])) ? $cfg['plazos'][$tipo] : [];
         $sinAct = ['warn' => !empty($pl['warn']) ? $pl['warn'] : $sinAct0['warn'], 'risk' => !empty($pl['risk']) ? $pl['risk'] : $sinAct0['risk']];
         $estancada = !empty($pl['stalled']) ? $pl['stalled'] : $estancada0;
         $alertas = [];
@@ -147,9 +148,9 @@ function resumenAgente($actual, $ajustes) {
         elseif ($pt->due < $hoy) $alertas[] = 'tarea vencida';
         if (!empty($o->fx->ausente)) $alertas[] = 'no vino en el funnel desde ' . $o->fx->ausente . ' (confirmar con Gerencia si sigue vigente)';
         $abiertas[] = [
-            'codigo' => $o->code, 'en_excel' => !empty($o->fx), 'nombre' => $o->name, 'titulo_funnel' => isset($o->fx->title) ? $o->fx->title : null, 'empresa' => isset($empresas[$o->companyId]) ? $empresas[$o->companyId] : '',
+            'codigo' => $o->code, 'en_excel' => !empty($o->fx), 'en_funnel' => !empty($o->fx) || !empty($o->crm), 'nombre' => $o->name, 'titulo_funnel' => isset($o->fx->title) ? $o->fx->title : null, 'empresa' => isset($empresas[$o->companyId]) ? $empresas[$o->companyId] : '',
             'etapa' => isset($etapas[$o->stage]) ? $etapas[$o->stage] : $o->stage, 'probabilidad' => $o->prob, 'moneda' => $o->currency,
-            'tipo_negocio' => isset($o->fx->tipo) ? $o->fx->tipo : null, 'valor_unico' => $o->oneTime, 'mensual' => $o->monthly, 'plazo_meses' => $o->term,
+            'tipo_negocio' => $tipo !== '' ? $tipo : null, 'valor_unico' => $o->oneTime, 'mensual' => $o->monthly, 'plazo_meses' => $o->term,
             'valor_total' => $valor($o), 'plazo_sin_gestion' => $sinAct['warn'],
             'fecha_cierre' => $o->closeDate, 'proxima_tarea' => $pt ? $pt->title : null, 'fecha_proxima_tarea' => $pt ? $pt->due : null,
             'dias_en_etapa' => $de, 'ultima_actividad' => $ultima, 'dias_sin_actividad' => $sa, 'alertas' => $alertas,
@@ -244,7 +245,7 @@ function resumenAgente($actual, $ajustes) {
     usort($tareas, function ($x, $y) { return strcmp($x['vence'], $y['vence']); });
     return [
         'hoy' => $hoy, 'guardado' => $actual->savedAt, 'parametros' => $cfg,
-        'totales' => ['abiertas' => count($abiertas), 'pipeline' => array_sum(array_column(array_filter($abiertas, function ($o) { return $o['en_excel']; }), 'valor_total')),
+        'totales' => ['abiertas' => count($abiertas), 'pipeline' => array_sum(array_column(array_filter($abiertas, function ($o) { return $o['en_funnel']; }), 'valor_total')),
                       'sin_tarea_pendiente' => count(array_filter($abiertas, function ($o) { return in_array('sin tarea pendiente', $o['alertas'], true); })),
                       'prospectos_abiertos' => count($prospectos)],
         'oportunidades_abiertas' => $abiertas, 'prospectos_abiertos' => $prospectos, 'empresas_buscar_contacto' => $buscar, 'planes' => $planes, 'ofertas_vigentes' => $ofertas, 'tareas_pendientes' => $tareas,

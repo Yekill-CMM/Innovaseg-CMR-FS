@@ -160,10 +160,10 @@ $d = $ver('g1');
 [$c, $r] = $guardar('g1', $d->rev, [['opps', 'O_fx', null, (object) ['id' => 'O_fx', 'code' => 'CM-261001-07', 'name' => 'Del funnel vigente', 'companyId' => 'C1', 'ownerId' => 'eN1', 'status' => 'abierta', 'stage' => 'seguimiento', 'fx' => ['id' => '501']]],
     ['opps', 'O_fx2', null, (object) ['id' => 'O_fx2', 'code' => 'CM-261001-07', 'name' => 'Repetida', 'companyId' => 'C1', 'ownerId' => 'eN1', 'status' => 'abierta', 'stage' => 'oferta'], 'O_fx']]);
 $todo = $ver('ad')->data;
-$ok($por($todo->opps, 'O_fx')->code === 'CM-261001-07' && $por($todo->opps, 'O_fx2')->code === "OP-$hoy-05", 'la gerencia puede cargar el funnel vigente con sus códigos CM; uno repetido recibe un OP');
+$ok($por($todo->opps, 'O_fx')->code === "OP-$hoy-05" && $por($todo->opps, 'O_fx2')->code === "OP-$hoy-06", 'tampoco la gerencia trae códigos del Excel: nada entra por ahí, toda oportunidad nueva recibe su OP');
 $d = $ver('eN1');
 [$c, $r] = $req('POST', '', ['baseRev' => $d->rev, 'data' => (function ($x) { $x->opps[] = (object) ['id' => 'O_full', 'code' => 'OP-000000-01', 'name' => 'Por copia completa', 'companyId' => 'C1', 'ownerId' => 'eN1', 'status' => 'abierta', 'stage' => 'oferta']; return $x; })($cp($d->data))], $S['eN1']);
-$ok($c === 200 && $por($r->data->opps, 'O_full')->code === "OP-$hoy-06", 'con la copia completa (cambios hechos sin conexión) también se asigna el código');
+$ok($c === 200 && $por($r->data->opps, 'O_full')->code === "OP-$hoy-07", 'con la copia completa (cambios hechos sin conexión) también se asigna el código');
 
 echo "8. Prospectos: el mismo PR creado a la vez\n";
 $dP = $ver('eN1'); $dJ = $ver('eS1');

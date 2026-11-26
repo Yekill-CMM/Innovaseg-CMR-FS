@@ -35,6 +35,10 @@ ok(E(`byId(S.opps,'oV').history.length`) === 1, 'correr la migración dos veces 
 console.log('2. Oportunidades creadas en el CRM, con código OP automático');
 E(`location.hash='oportunidades';render()`);
 ok(!!doc.querySelector('[data-action="newOpp"]'), 'hay botón "Nueva oportunidad"');
+ok(!doc.querySelector('[data-funnel]') && !/Importar funnel/.test(visible()), 'no hay "Importar funnel": nada entra por Excel');
+E(`location.hash='config';render()`);
+ok(/Descargar respaldo/.test(visible()) && !doc.querySelector('[data-funnel]'), 'tampoco en Configuración');
+E(`location.hash='oportunidades';render()`);
 const cols = [...doc.querySelectorAll('.kanban .col h2')].map(h => h.firstChild.textContent.trim());
 ok(JSON.stringify(cols) === JSON.stringify(['Pipeline', 'Upside', 'Forecast', 'Booking', 'Facturado']), 'Kanban con 4 etapas más Facturado: ' + cols.join(', '));
 const txt = doc.querySelector('.kanban').textContent;
@@ -42,12 +46,15 @@ ok(/Oferta en desarrollo/.test(txt) && /Oferta entregada/.test(txt) && /Adjudica
 ok(/Antigua/.test(txt) && !/no viene en el Excel/.test(visible()), 'la oportunidad del Excel queda en Pipeline, sin avisos de pendientes');
 E(`ACTIONS.newOpp({})`);
 ok(!doc.querySelector('form[data-form="newOpp"] [name="code"]') && doc.querySelector('form[data-form="newOpp"] input[disabled]').value === 'OP-' + k + '-01', 'el código no se escribe: muestra el provisional OP-' + k + '-01');
-let err = enviar('form[data-form="newOpp"]', { companyId: 'cA', name: 'Sin monto', closeDate: E('addDays(30)'), nextAction: 'Llamar', nextActionDate: hoy });
+let err = enviar('form[data-form="newOpp"]', { companyId: 'cA', name: 'Sin tipo', monthly: '1000000', term: '12', closeDate: E('addDays(30)'), nextAction: 'Llamar', nextActionDate: hoy });
+ok(/tipo de negocio/.test(err), 'sin tipo de negocio no se crea: «' + err + '»');
+err = enviar('form[data-form="newOpp"]', { tipo: 'Seg. Física', monthly: '0', term: '0', companyId: 'cA', name: 'Sin monto', closeDate: E('addDays(30)'), nextAction: 'Llamar', nextActionDate: hoy });
 ok(/al menos un monto/.test(err), 'sin monto no se crea: «' + err + '»');
 const nOp = E('S.opps.length');
-err = enviar('form[data-form="newOpp"]', { companyId: 'cA', name: 'CCTV bodega ACME', monthly: '2000000', term: '24', closeDate: E('addDays(30)'), nextAction: 'Enviar propuesta', nextActionDate: hoy });
+err = enviar('form[data-form="newOpp"]', { companyId: 'cA', name: 'CCTV bodega ACME', tipo: 'Seg. Electrónica', monthly: '2000000', term: '24', closeDate: E('addDays(30)'), nextAction: 'Enviar propuesta', nextActionDate: hoy });
 const nueva = E(`JSON.parse(JSON.stringify(S.opps[S.opps.length-1]))`);
 ok(err === '' && E('S.opps.length') === nOp + 1 && nueva.code === 'OP-' + k + '-01' && nueva.crm === true && nueva.ownerId === 'u1', 'se crea con código OP-' + k + '-01, marca crm y la persona como responsable');
+ok(E(`tipoLabel(byId(S.opps,'${nueva.id}'))`) === 'Seguridad Electrónica' && E(`lineaDe(byId(S.opps,'${nueva.id}'))`) === 'SSEE Servicio', 'su tipo de negocio la ubica en su línea de la meta de presupuesto');
 ok(E(`enFunnel(byId(S.opps,'${nueva.id}'))`) && /CCTV bodega ACME/.test(doc.querySelector('.kanban').textContent), 'suma al funnel y aparece en el Kanban');
 ok(E(`S.audit.some(a=>a.entity==='${nueva.code}'&&a.field==='Creación')`), 'la creación queda en la auditoría');
 E(`openEntity('opp','${nueva.id}')`);
@@ -67,7 +74,7 @@ E(`S.leads.push({id:'lP',code:'PR-2026-0001',name:'CCTV Parque Taltal',companyId
   ACTIONS.convertLead({id:'lP'})`);
 ok(!doc.querySelector('form[data-form="convert"] [name="code"]') && doc.querySelector('form[data-form="convert"] [name="name"]').value === 'CCTV Parque Taltal', 'no pide código y propone el nombre del prospecto');
 const n0 = E('S.opps.length');
-err = enviar('form[data-form="convert"]', { note: 'Oferta a cargo de ingeniería', oneTime: '45000000', closeDate: E('addDays(40)') });
+err = enviar('form[data-form="convert"]', { note: 'Oferta a cargo de ingeniería', tipo: 'One Shot', oneTime: '45000000', closeDate: E('addDays(40)') });
 const dl = E(`JSON.parse(JSON.stringify(S.opps[S.opps.length-1]))`);
 ok(err === '' && E(`byId(S.leads,'lP').stage`) === 'Oportunidad creada' && E('S.opps.length') === n0 + 1 && dl.leadId === 'lP' && E(`byId(S.leads,'lP').oppId`) === dl.id, 'el prospecto pasa a "Oportunidad creada" y queda ligado a la oportunidad nueva');
 ok(/^OP-\d{6}-\d{2}$/.test(dl.code) && dl.crm && dl.need === 'Robos en el parque' && dl.services.includes('CCTV'), 'la oportunidad trae código OP, necesidad y servicio del prospecto');

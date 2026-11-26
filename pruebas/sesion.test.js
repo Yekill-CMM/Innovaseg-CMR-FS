@@ -102,7 +102,7 @@ const enviar=async(t,form,valores)=>{const fm=t.w.document.querySelector(`form[d
  t=abrir({sesion:'sN',data:B});await espera(800);
  ok(t.E('asignables().map(u=>u.id).sort().join()')==='eN1,eN2,sN'&&t.E('seesAll()')&&!t.E('esAdmin()'),'el subgerente asigna a su equipo y ve la vista del equipo, sin administrar');
  t=abrir({sesion:'g1',data:B});await espera(800);t.E(`location.hash='config';render()`);
- ok(t.E('asignables().length')===6&&!!t.w.document.querySelector('form[data-form="config"] fieldset[disabled]')&&!!t.w.document.querySelector('[data-funnel]'),'el gerente asigna a cualquiera e importa el funnel, con la configuración en solo lectura');
+ ok(t.E('asignables().length')===6&&!!t.w.document.querySelector('form[data-form="config"] fieldset[disabled]')&&!t.w.document.querySelector('[data-funnel]'),'el gerente asigna a cualquiera, con la configuración en solo lectura (y sin importar funnel: nada entra por Excel)');
  t=abrir({sesion:'ad',data:B});await espera(800);t.E(`location.hash='config';render()`);await espera(500);
  const txt=t.w.document.querySelector('#main').textContent;
  ok(/Usuarios y equipos/.test(txt)&&/Javier Núñez/.test(txt)&&/Clave temporal/.test(txt)&&!t.w.document.querySelector('form[data-form="config"] fieldset[disabled]'),'el administrador ve las cuentas con su estado y cambia la configuración');

@@ -337,9 +337,9 @@ const CM_RE=/^CM-\d{6}-\d{2}$/;
 // Una oportunidad sin vínculo al Excel (o.fx) es antigua o creada a mano antes de esta regla: no suma al pipeline y queda
 // «pendiente del Excel» hasta que el archivo la traiga con su código CM.
 const enExcel=o=>!!o.fx;
-// CRM FS (nov 2026): las oportunidades nuevas se crean y gestionan en el CRM, con código OP-AAMMDD-NN que asigna el servidor
-// (guardado.php) y la marca crm. Suman al funnel igual que las del Excel. Las importadas del Excel (o.fx) siguen como hoy
-// hasta definir la carga inicial del funnel vigente.
+// CRM FS (nov 2026): las oportunidades se crean y gestionan solo en el CRM, con código OP-AAMMDD-NN que asigna el servidor
+// (guardado.php) y la marca crm. No entra nada por Excel: la importación del funnel no tiene entrada en la pantalla y el
+// funnel solo se exporta. Lo de o.fx queda para leer datos antiguos.
 const enFunnel=o=>!!o.fx||!!o.crm;
 const oppCRM=o=>!!o&&!o.fx&&!!o.crm;
 // Código provisional (el definitivo lo pone el servidor al guardar: este navegador no ve las oportunidades de todos)
@@ -348,8 +348,10 @@ function provisionalOP(){const k=todayIso.slice(2,4)+todayIso.slice(5,7)+todayIs
 // Tipos de negocio del Excel y sus plazos. Cada tipo puede tener plazos propios (Configuración); lo que no se defina toma
 // los generales. Se iteran en conjunto: no todos los proyectos tienen el mismo plazo de consulta y respuesta.
 const TIPOS_NEGOCIO=[['Seg. Física','Seguridad Física'],['Seg. Electrónica','Seguridad Electrónica'],['Seg. Integral','Seguridad Integral'],['One Shot','One Shot']];
-const tipoLabel=o=>{const t=o.fx&&o.fx.tipo;const x=TIPOS_NEGOCIO.find(([k])=>k===t);return x?x[1]:(t||'Sin tipo')};
-function plazo(o){const R=S.config,t=(R.plazos||{})[o&&o.fx&&o.fx.tipo]||{};const v=(k,d)=>Number(t[k])>0?Number(t[k]):d;
+// Tipo de negocio: lo elige quien crea la oportunidad en el CRM (o.tipo); las antiguas lo traían del Excel (o.fx.tipo)
+const tipoDe=o=>o?(o.tipo||(o.fx&&o.fx.tipo)||''):'';
+const tipoLabel=o=>{const t=tipoDe(o);const x=TIPOS_NEGOCIO.find(([k])=>k===t);return x?x[1]:(t||'Sin tipo')};
+function plazo(o){const R=S.config,t=(R.plazos||{})[tipoDe(o)]||{};const v=(k,d)=>Number(t[k])>0?Number(t[k]):d;
  return{warn:v('warn',R.oppNoAct.warn),risk:v('risk',R.oppNoAct.risk),remind:v('remind',R.followup.remind),yellow:v('yellow',R.followup.yellow),red:v('red',R.followup.red),stalled:v('stalled',R.stalledDays)}}
 // En una oportunidad solo se mira el estatus (Excel) y se gestionan tareas: su «próxima acción» es su próxima tarea pendiente.
 // Días sin gestión: desde la última gestión real (actividad, tarea completada o «última conversación» del Excel);
@@ -1682,7 +1684,7 @@ function oppCard(o){
  return `<div class="card ${miss.length?'flag':''} ${invClass(o)}" data-action="open" data-type="opp" data-id="${o.id}" tabindex="0">
   <div class="c-co">${esc(cname(o.companyId))}</div><div class="c-name">${esc(o.name)}</div>
   <div class="c-row"><span class="c-amt">${mm(tcv(o))}</span><span>${o.prob}%</span></div>
-  ${o.fx&&o.fx.tipo?`<div class="c-row"><span class="muted">${esc(tipoLabel(o))}</span></div>`:''}
+  ${tipoDe(o)?`<div class="c-row"><span class="muted">${esc(tipoLabel(o))}</span></div>`:''}
   ${o.status==='ganada'?`<div class="c-row"><span>Booking ${fmtDate(o.wonAt)}${(o.wonAt||'').slice(0,4)!==todayIso.slice(0,4)&&o.wonAt?' '+o.wonAt.slice(0,4):''}</span>${(o.wonAt||'').slice(0,7)===todayIso.slice(0,7)?'<span class="b b-ok">Este mes</span>':''}</div>${(()=>{const l=oppInvoices(o.id);const p=invPct(o);return `<div class="c-row"><span>${l.length?'Facturado '+mm(invoicedNet(l)):'Sin facturar'}</span>${p!==null?`<span>${p}%</span>`:''}</div>${p!==null&&p>0&&p<100?`<div class="meter" title="Facturado ${p}% de la proyección"><i style="width:${p}%"></i></div>`:''}${p!==null&&p>=100?`<div class="c-row"><span class="muted">Última factura ${fmtDate(oppInvoices(o.id).filter(invCounts).map(x=>x.date||'').sort().pop()||'')}</span></div>`:''}<div class="c-row">${recBadge(recOf(o.id))}</div>`})()}`:`<div class="c-row"><span>Cierre ${fmtDate(o.closeDate)}</span><span>${d} días en etapa</span></div>`}
   ${o.status==='abierta'?(()=>{const g=idleDays(o),R=plazo(o);return `<div class="c-row"><span class="b ${g>=R.risk?'b-bad':g>=R.warn?'b-warn':''}" title="Días desde la última gestión real">${g} días sin gestión</span></div>`})():''}
   <div class="c-row"><span>${esc(uname(o.ownerId))}</span>${o.currency!=='CLP'?`<span class="b">${o.currency}</span>`:''}</div>
@@ -1699,7 +1701,7 @@ function viewOpps(){
  const ausentes=open.filter(fxAusente);
 
  const avisoAus=ausentes.length?`<div class="warnbox warn" style="margin-bottom:12px"><strong>${ausentes.length} oportunidad${ausentes.length>1?'es':''} abierta${ausentes.length>1?'s':''} ${ausentes.length>1?'no vinieron':'no vino'} en la última importación del funnel.</strong> Siguen aquí con su historial y suman al pipeline. Revisa con Gerencia si siguen vigentes. ${ausentes.map(o=>`<a href="#" data-action="open" data-type="opp" data-id="${o.id}">${esc(cname(o.companyId))}: ${esc(o.name)} (desde ${esc(fmtDate(o.fx.ausente))})</a>`).join(' · ')}</div>`:'';
- const head=`<div class="page-h"><div><h1>Oportunidades</h1><p class="sub">${open.length} abiertas por ${mm(sum(open,tcv))}, ponderado ${mm(sum(open,weighted))}. Se crean y gestionan aquí, con código OP automático${S.fxLast&&S.fxLast.at?'; las del Excel de Gerencia, importado el '+fmtDate(S.fxLast.at)+', se actualizan con el Excel':''}.</p></div><div class="d-actions"><button class="btn pri" data-action="newOpp">Nueva oportunidad</button><label class="btn" style="cursor:pointer" title="Excel o CSV exportado de la lista Funnel de Ventas en SharePoint">Importar funnel<input type="file" accept=".xlsx,.csv" data-funnel hidden></label><button class="btn" data-action="export" data-what="opps">Exportar</button></div></div>
+ const head=`<div class="page-h"><div><h1>Oportunidades</h1><p class="sub">${open.length} abiertas por ${mm(sum(open,tcv))}, ponderado ${mm(sum(open,weighted))}. Se crean y gestionan aquí, con código OP automático.</p></div><div class="d-actions"><button class="btn pri" data-action="newOpp">Nueva oportunidad</button><button class="btn" data-action="export" data-what="opps">Exportar</button></div></div>
  <div class="toolbar"><div class="seg"><button class="${UI.oppView==='kanban'?'on':''}" data-action="setUI" data-k="oppView" data-v="kanban">Kanban</button><button class="${UI.oppView==='tabla'?'on':''}" data-action="setUI" data-k="oppView" data-v="tabla">Tabla</button></div>
  ${seesAll()?`<select data-filter="oppOwner" aria-label="Responsable">${opt(S.users.map(u=>[u.id,u.name]),UI.oppOwner,'Todos los ejecutivos')}</select>`:''}
  <select data-filter="oppIndustry" aria-label="Industria">${opt(INDUSTRIES,UI.oppIndustry,'Todas las industrias')}</select>
@@ -2115,7 +2117,7 @@ function viewConfig(){
  <div class="section"><h2>Auditoría (últimos cambios)</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Usuario</th><th>Registro</th><th>Campo</th><th>Valor anterior</th><th>Valor nuevo</th></tr></thead><tbody>${S.audit.slice(0,60).map(a=>`<tr><td>${esc(a.at)}</td><td>${esc(uname(a.userId))}</td><td>${esc(a.entity)}</td><td>${esc(a.field)}</td><td>${esc(a.oldV)}</td><td>${esc(a.newV)}</td></tr>`).join('')}</tbody></table></div></div>
  <div class="section"><h2>Dónde se guardan tus datos</h2><p class="sm" style="max-width:78ch">${STORE.mode==='servidor'?(canSync()?'Los datos se guardan en el servidor y cada persona entra con su cuenta: ves lo que te corresponde según tu rol y tu equipo, y el servidor revisa cada cambio. Al volver a la pestaña se cargan los cambios hechos por otras personas o en otro dispositivo. El servidor guarda además respaldos por hora y por día.':'Estás con datos de ejemplo, que no se suben al servidor. Restaura tu respaldo o empieza con tus datos y todo lo que registres quedará en el servidor.'):STORE.mode==='artefacto'?(canSync()?'Tus datos se guardan en la base de datos de este artefacto, en un espacio privado que solo tú puedes ver, y se sincronizan entre tus dispositivos.':'Estás con datos de ejemplo, que no se suben al artefacto.'):STORE.mode==='clave'?'El servidor está disponible, pero no has entrado con tu usuario en este dispositivo. Mientras tanto, los cambios quedan solo en este navegador.':STORE.mode==='conectando'?'Conectando con el guardado…':'Los datos quedan solo en este navegador. Descarga un respaldo al menos una vez por semana.'}</p>
  ${STORE.mode==='clave'?'<div class="d-actions" style="margin-bottom:8px"><button class="btn pri" data-action="askKey">Entrar</button></div>':''}<p class="sm muted">Modo actual: ${S.mode==='real'?'datos reales':'datos de ejemplo'}. Último respaldo: ${S.lastBackup?fmtDate(S.lastBackup)+' ('+rel(S.lastBackup)+')':'nunca'}.</p>
- <div class="d-actions"><button class="btn pri" data-action="backup">Descargar respaldo</button>${!sesion||admin?'<label class="btn" style="cursor:pointer">Restaurar respaldo<input type="file" accept=".json,application/json" data-restore hidden></label>':''}${!sesion||esTodo()?'<label class="btn" style="cursor:pointer">Importar funnel<input type="file" accept=".xlsx,.csv" data-funnel hidden></label>':''}${S.mode!=='real'&&(!sesion||admin)?'<button class="btn danger" data-action="cleanStart">Empezar con mis datos</button>':''}</div></div>
+ <div class="d-actions"><button class="btn pri" data-action="backup">Descargar respaldo</button>${!sesion||admin?'<label class="btn" style="cursor:pointer">Restaurar respaldo<input type="file" accept=".json,application/json" data-restore hidden></label>':''}${S.mode!=='real'&&(!sesion||admin)?'<button class="btn danger" data-action="cleanStart">Empezar con mis datos</button>':''}</div></div>
  ${S.mode!=='real'&&!sesion?'<div class="section"><h2>Datos de demostración</h2><p class="sm muted">Restaura los datos de ejemplo. Se pierden los cambios hechos sobre ellos.</p><button class="btn danger" data-action="resetDemo">Restaurar datos de ejemplo</button></div>':''}`;
 }
 
@@ -2256,9 +2258,10 @@ function contactForm(k,company){
 }
 // Oportunidad nueva del CRM (d: datos del formulario; base: empresa, responsable y lo que viene del prospecto). Devuelve el error si falta algo.
 function nuevaOpp(d,base){
- const o=Object.assign({id:uid('o'),code:provisionalOP(),crm:true,name:String(d.name||'').trim(),companyId:'',siteId:'',ownerId:S.currentUser,stage:d.stage||'oferta',prob:stageOf(d.stage||'oferta').p,currency:d.currency||'CLP',oneTime:num(d.oneTime),monthly:num(d.monthly),term:num(d.term),closeDate:d.closeDate,nextAction:String(d.nextAction||'').trim(),nextActionDate:d.nextActionDate,stageEnteredAt:todayIso,createdAt:todayIso,status:'abierta',contactIds:[],need:'',pain:'',competitors:'',currentProvider:'',strategy:'',risks:'',probReason:'',history:[],services:[]},base);
+ const o=Object.assign({id:uid('o'),code:provisionalOP(),crm:true,name:String(d.name||'').trim(),companyId:'',siteId:'',ownerId:S.currentUser,stage:d.stage||'oferta',prob:stageOf(d.stage||'oferta').p,tipo:d.tipo||'',currency:d.currency||'CLP',oneTime:num(d.oneTime),monthly:num(d.monthly),term:num(d.term),closeDate:d.closeDate,nextAction:String(d.nextAction||'').trim(),nextActionDate:d.nextActionDate,stageEnteredAt:todayIso,createdAt:todayIso,status:'abierta',contactIds:[],need:'',pain:'',competitors:'',currentProvider:'',strategy:'',risks:'',probReason:'',history:[],services:[]},base);
  if(!o.companyId)return 'Selecciona la empresa.';
  if(!o.name)return 'Falta el nombre de la oportunidad.';
+ if(!o.tipo)return 'Selecciona el tipo de negocio.';
  if(!(tcv(o)>0))return 'Ingresa al menos un monto: único, o mensual con plazo en meses.';
  if(!o.closeDate)return 'Falta la fecha estimada de cierre.';
  if(o.closeDate<todayIso)return 'La fecha de cierre no puede estar en el pasado.';
@@ -2268,6 +2271,7 @@ function oppEditForm(o){
   <label class="f full">Nombre de la oportunidad<input name="name" required value="${esc(o.name)}"></label>
   ${o.status==='abierta'?`<label class="f">Etapa<select name="stage">${opt(FUNNEL_STAGES.filter(s=>!LEGACY_STAGES.includes(s.id)).map(s=>[s.id,s.name+(STAGE_DESC[s.id]?' · '+STAGE_DESC[s.id]:'')]),o.stage)}</select></label>`:''}
   <label class="f">Probabilidad (%)<input type="number" min="0" max="100" name="prob" value="${esc(o.prob)}"></label>
+  <label class="f">Tipo de negocio<select name="tipo">${opt(TIPOS_NEGOCIO,tipoDe(o),'Sin tipo')}</select></label>
   <label class="f">Moneda<select name="currency">${opt(['CLP','UF','USD'],o.currency||'CLP')}</select></label>
   <label class="f">Monto único<input type="number" min="0" step="any" name="oneTime" value="${esc(o.oneTime||0)}"></label>
   <label class="f">Monto mensual<input type="number" min="0" step="any" name="monthly" value="${esc(o.monthly||0)}"></label>
@@ -2281,6 +2285,7 @@ function oppNewForm(company,lead){
   <label class="f full">Nombre de la oportunidad<input name="name" required placeholder="Servicio y sitio, por ejemplo: CCTV Parque FV Taltal"></label>
   <label class="f">Código<input value="${provisionalOP()}" disabled><span class="hint">Automático: fecha de creación y correlativo del día. El servidor lo confirma al guardar.</span></label>
   <label class="f">Etapa<select name="stage">${opt(FUNNEL_STAGES.filter(s=>s.id!=='adjudicada').map(s=>[s.id,s.name+' · '+STAGE_DESC[s.id]]),'oferta')}</select></label>
+  <label class="f">Tipo de negocio<select name="tipo" required>${opt(TIPOS_NEGOCIO,'','Selecciona el tipo')}</select><span class="hint">Define los plazos de seguimiento y la línea de la meta.</span></label>
   <label class="f">Moneda<select name="currency">${opt(['CLP','UF','USD'],'CLP')}</select></label>
   <label class="f">Monto único<input type="number" min="0" step="any" name="oneTime" value="0"></label>
   <label class="f">Monto mensual<input type="number" min="0" step="any" name="monthly" value="0"></label>
@@ -2341,6 +2346,7 @@ const ACTIONS={
   <label class="f full">Nombre de la oportunidad<input name="name" required value="${esc(l.name||l.service||'')}" placeholder="Servicio y sitio, por ejemplo: CCTV Parque FV Taltal"></label>
   <label class="f">Código<input value="${provisionalOP()}" disabled><span class="hint">Automático; el servidor lo confirma al guardar.</span></label>
   <label class="f">Etapa<select name="stage">${opt(FUNNEL_STAGES.filter(s=>s.id!=='adjudicada').map(s=>[s.id,s.name+' · '+STAGE_DESC[s.id]]),'oferta')}</select></label>
+  <label class="f">Tipo de negocio<select name="tipo" required>${opt(TIPOS_NEGOCIO,'','Selecciona el tipo')}</select><span class="hint">Define los plazos de seguimiento y la línea de la meta.</span></label>
   <label class="f">Moneda<select name="currency">${opt(['CLP','UF','USD'],'CLP')}</select></label>
   <label class="f">Monto único<input type="number" min="0" step="any" name="oneTime" value="0"></label>
   <label class="f">Monto mensual<input type="number" min="0" step="any" name="monthly" value="0"></label>
@@ -2710,11 +2716,11 @@ const SUBMITS={
  newOpp:(d,f)=>{const o=nuevaOpp(d,{companyId:d.companyId,ownerId:d.ownerId});if(typeof o==='string')return setErr(f,o);
   S.opps.push(o);markTargetOpp(o.companyId);audit(o.code,'Creación','',o.name);save();closeModal();render();openEntity('opp',o.id);toast(`Oportunidad ${esc(o.code)} creada.`)},
  oppEdit:(d,f)=>{const o=byId(S.opps,f.dataset.id);if(!oppCRM(o))return closeModal();
-  const n={name:String(d.name||'').trim(),currency:d.currency,oneTime:num(d.oneTime),monthly:num(d.monthly),term:num(d.term),prob:Math.min(100,Math.max(0,num(d.prob))),closeDate:d.closeDate,ownerId:d.ownerId||o.ownerId};
+  const n={name:String(d.name||'').trim(),tipo:d.tipo||'',currency:d.currency,oneTime:num(d.oneTime),monthly:num(d.monthly),term:num(d.term),prob:Math.min(100,Math.max(0,num(d.prob))),closeDate:d.closeDate,ownerId:d.ownerId||o.ownerId};
   if(!n.name)return setErr(f,'Falta el nombre de la oportunidad.');
   if(!(tcv(Object.assign({},o,n))>0))return setErr(f,'Ingresa al menos un monto: único, o mensual con plazo en meses.');
   if(!n.closeDate)return setErr(f,'Falta la fecha estimada de cierre.');
-  const L={name:'Nombre',currency:'Moneda',oneTime:'Monto único',monthly:'Monto mensual',term:'Plazo',prob:'Probabilidad',closeDate:'Cierre estimado',ownerId:'Responsable'};
+  const L={name:'Nombre',tipo:'Tipo de negocio',currency:'Moneda',oneTime:'Monto único',monthly:'Monto mensual',term:'Plazo',prob:'Probabilidad',closeDate:'Cierre estimado',ownerId:'Responsable'};
   Object.keys(n).forEach(k=>{if(String(o[k]??'')!==String(n[k])){audit(o.code,L[k],k==='ownerId'?uname(o[k]):o[k],k==='ownerId'?uname(n[k]):n[k]);o[k]=n[k]}});
   if(d.stage&&d.stage!==o.stage&&o.status==='abierta'){if(d.stage==='adjudicada'){save();closeModal();render();return openWon(o.id)}setStage(o,d.stage);o.prob=Math.min(100,Math.max(0,num(d.prob)))||stageOf(d.stage).p}
   save();closeModal();render();openEntity('opp',o.id);toast('Oportunidad actualizada.')},
@@ -3108,7 +3114,7 @@ document.addEventListener('submit',e=>{const f=e.target;if(!f.dataset.form)retur
 document.addEventListener('change',e=>{const t=e.target;
  if(t.dataset.filter!==undefined){UI[t.dataset.filter]=t.value;render();return}
  if(t.dataset.targetStatus){const[pid,cid]=t.dataset.targetStatus.split('|');const p=byId(S.plans,pid);const tg=p.targets.find(x=>x.companyId===cid);const old=tg.status;tg.status=t.value;if(t.value==='Descartado'&&tg.leadId)S.tasks.filter(x=>x.planId===p.id&&x.entityId===tg.leadId&&isOpenTask(x)).forEach(x=>x.status='Cancelada');audit(p.name,'Estado de '+cname(cid),old,t.value);save();render();toast(t.value==='Descartado'?'Empresa descartada. Sus tareas pendientes del plan se cancelaron.':'Estado actualizado.');return}
- if(t.hasAttribute('data-funnel')&&t.files&&t.files[0]){const f=t.files[0];t.value='';fxImportFile(f);return}
+ // CRM FS: las oportunidades se crean solo en el CRM. La importación del funnel desde Excel (fxImportFile) quedó sin entrada en la pantalla.
  if(t.hasAttribute('data-meta')&&t.files&&t.files[0]){const f=t.files[0];t.value='';metaImportFile(f);return}
  if(t.hasAttribute('data-restore')&&t.files&&t.files[0]){const rd=new FileReader();rd.onload=()=>{try{const data=JSON.parse(rd.result);if(!Array.isArray(data.companies)||!Array.isArray(data.opps))throw new Error('formato');S=data;migrate();marcarReemplazo();save();closeDrawer();render();toast('Respaldo restaurado.')}catch(e){toast('El archivo no es un respaldo válido del CRM.')}};rd.readAsText(t.files[0]);return}
  if((t.id==='userSel'||t.dataset.actionChange==='user')&&STORE.mode==='servidor'&&SES.yo)return;   // con sesión, la persona la fija el servidor
