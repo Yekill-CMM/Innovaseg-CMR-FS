@@ -1403,7 +1403,13 @@ function renderNav(v){
 }
 const VIEWS={hoy:viewHoy,planes:viewPlans,prospectos:viewLeads,empresas:viewCompanies,contactos:viewContacts,oportunidades:viewOpps,ofertas:viewOffers,actividades:viewActivities,tareas:viewTasks,reportes:viewReports,config:viewConfig};
 function currentView(){const v=(location.hash.slice(1)||'hoy').split('/')[0];return VIEWS[v]?v:'hoy'}
-function render(){runAutomations();const rv=$('#crmRev');if(rv&&!rv.textContent){rv.textContent='rev. '+CRM_REV.n;rv.title='Revisión '+CRM_REV.n+' del '+fmtDate(CRM_REV.fecha)}const v=currentView();renderNav(v);$('#main').innerHTML=VIEWS[v]();if(CUR)refreshDrawer();joanCtxAct();avisoConexion()}
+// Sin sesión no se muestra ningún dato: ni la copia que haya en este navegador (puede ser de otra persona) ni los de ejemplo
+function renderSinSesion(){
+ $('#side').innerHTML=`<div class="foot sync" id="syncState" data-state="${esc(syncState())}">${esc(syncText())}</div>`;
+ const sel=$('#userSel'),chip=$('#userChip');sel.hidden=true;sel.innerHTML='';if(chip)chip.hidden=true;
+ $('#main').innerHTML='<div class="card" style="max-width:520px;margin:48px auto;padding:22px"><h1 style="font-size:20px;margin:0 0 6px">CRM FS</h1><p class="sm muted" style="margin:0 0 14px">Entra con tu usuario para ver tu cartera.</p><button class="btn pri" data-action="askKey">Entrar</button></div>';
+ closeDrawer();avisoConexion()}
+function render(){if(STORE.mode==='clave'){renderSinSesion();return}runAutomations();const rv=$('#crmRev');if(rv&&!rv.textContent){rv.textContent='rev. '+CRM_REV.n;rv.title='Revisión '+CRM_REV.n+' del '+fmtDate(CRM_REV.fecha)}const v=currentView();renderNav(v);$('#main').innerHTML=VIEWS[v]();if(CUR)refreshDrawer();joanCtxAct();avisoConexion()}
 function toast(msg){const t=$('#toast');t.innerHTML=msg;t.hidden=false;clearTimeout(toast._t);toast._t=setTimeout(()=>t.hidden=true,4200)}
 function openDrawer(html){$('#drawerLayer').innerHTML=`<div class="overlay" data-action="closeDrawer"></div><aside class="drawer" role="dialog" aria-modal="true">${html}</aside>`}
 function closeDrawer(){$('#drawerLayer').innerHTML='';CUR=null;joanCtxAct()}

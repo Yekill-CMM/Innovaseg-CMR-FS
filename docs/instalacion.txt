@@ -38,3 +38,10 @@ NOTAS
    - Si dos personas guardan al mismo tiempo, la segunda recibe la versión más
      reciente y repite su último cambio (el guardado registro por registro de
      la Fase 1 lo resuelve).
+
+DEMOSTRACIÓN (instalación de prueba, nunca la de producción)
+   - En una carpeta de datos vacía:
+       php herramientas/demo.php [--datos=<carpeta>]
+   - Crea las 12 cuentas de ejemplo con clave temporal (se muestran una sola
+     vez) y una cartera inventada del rubro. Si la carpeta ya tiene datos o
+     cuentas, no hace nada. El guion de la demo está en docs/demo.md.

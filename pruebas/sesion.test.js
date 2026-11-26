@@ -57,6 +57,7 @@ const enviar=async(t,form,valores)=>{const fm=t.w.document.querySelector(`form[d
  await espera(800);
  ok(!!t.w.document.querySelector('form[data-form="entrar"]')&&/Entrar al CRM/.test(t.modal()),'sin sesión pide usuario y clave');
  ok(t.E('STORE.mode')==='clave'&&/No has entrado con tu usuario/.test(t.w.document.querySelector('#avisoConexion').textContent),'y avisa arriba que no se está guardando nada');
+ {const m=t.w.document.querySelector('#main').textContent,u=t.w.document.querySelector('#userSel');ok(/Entra con tu usuario/.test(m)&&!/Solar Andes|Claudio|Oportunidad de Paula/.test(m+t.w.document.querySelector('#side').textContent+u.innerHTML)&&u.hidden&&!t.w.document.querySelector('#side a'),'sin sesión no muestra datos detrás: ni los de ejemplo ni una copia que haya en el navegador')}
  await enviar(t,'entrar',{usuario:' pcifuentes ',clave:'Temporal-1234'});
  ok(t.srv.entradas[0].usuario==='pcifuentes'&&/Elige tu clave/.test(t.modal())&&/Hola, Paula/.test(t.modal()),'con clave temporal pide elegir una propia');
  await enviar(t,'entrarClave',{nueva:'Mi-clave-2026-x',repetir:'otra-cosa-2026'});
