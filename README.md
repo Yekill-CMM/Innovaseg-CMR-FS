@@ -29,8 +29,8 @@ nunca llega a su navegador:
 
 | Rol | Ve | Cambia |
 |---|---|---|
-| Ejecutivo | Empresas y contactos (todos); lo suyo en prospectos, planes, oportunidades, ofertas, tareas, actividades, facturas y actas; su meta | Lo suyo. Crea y edita empresas y contactos (todos) |
-| Subgerente | Además, lo de su equipo y sus metas | Lo de su equipo (puede traspasar y asignar tareas dentro de él); todas las empresas y contactos |
+| Ejecutivo | Empresas y contactos (todos); lo suyo en prospectos, planes, oportunidades, ofertas, tareas, actividades, facturas y actas; su meta | Lo suyo. Crea empresas y contactos y edita los que creó; en una empresa de otra persona solo agrega contactos, sitios, prospectos y oportunidades |
+| Subgerente | Además, lo de su equipo y sus metas | Lo de su equipo (puede traspasar y asignar tareas dentro de él); edita todas las empresas y contactos |
 | Gerente | Todo | Todo lo comercial; la configuración, solo lectura |
 | Administrador | Todo | Todo, más cuentas, configuración, eliminar y fusionar empresas y contactos, restaurar respaldos y traspasar carteras |
 

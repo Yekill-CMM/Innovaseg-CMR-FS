@@ -130,10 +130,10 @@ $ok($c === 409 && isset($r->data) && strpos(json_encode($r, JSON_UNESCAPED_UNICO
 $d = $ver('eN1'); $data = $d->data; $data->leads[] = (object) ['name' => 'sin id'];
 [$c, $r] = $req('POST', '', ['baseRev' => $d->rev, 'data' => $data], $S['eN1']);
 $ok($c === 422 && !empty($r->rechazo) && isset($r->data) && strpos(json_encode($r, JSON_UNESCAPED_UNICODE), 'marca-sN') === false, 'un rechazo (422: datos mal formados) tampoco filtra datos ajenos');
-$d = $ver('eN1'); $data = $d->data; $por($data->companies, 'C2')->notes = 'Visita en enero';
+$d = $ver('eN1'); $data = $d->data; $por($data->companies, 'C1')->notes = 'Visita en enero'; $por($data->companies, 'C2')->notes = 'no';
 [$c, $r] = $req('POST', '', ['baseRev' => $d->rev, 'data' => $data], $S['eN1']);
-$c2 = $por($ver('ad')->data->companies, 'C2');
-$ok($c === 200 && empty($r->avisos) && $c2->notes === 'Visita en enero' && $c2->updatedBy === 'eN1', 'Paula edita una empresa creada por otra persona y queda anotado que fue ella');
+$todoE = $ver('ad')->data->companies; $c1 = $por($todoE, 'C1'); $c2 = $por($todoE, 'C2');
+$ok($c === 200 && count($r->avisos) === 1 && $c1->notes === 'Visita en enero' && $c1->updatedBy === 'eN1' && !isset($c2->notes), 'Paula edita la empresa que creó (queda anotado que fue ella), no la que creó otra persona');
 [$c] = $req('POST', '', ['baseRev' => $d->rev, 'data' => $d->data, 'reemplazo' => true], $S['g1']);
 $ok($c === 403, 'solo el administrador reemplaza todos los datos (restaurar un respaldo)');
 [$c] = $req('POST', '?accion=ajustes', ['ajustes' => ['uf' => 1]], $S['sN']);

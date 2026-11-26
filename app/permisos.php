@@ -18,11 +18,14 @@
    - En lo que tiene dueño: lo de su alcance, y al crear o traspasar, solo hacia
      personas a las que puede asignar (ejecutivo: a sí mismo; subgerente: a su
      equipo; gerente y administrador: a cualquiera).
-   - Empresas y contactos: cualquier persona los crea y los edita, con trazabilidad: el
-     servidor anota createdBy al crear y updatedBy/updatedAt en cada cambio (la pantalla no
-     puede cambiar esos campos), y «cambios» guarda la persona, el valor anterior y el nuevo.
-     El responsable de la empresa (ownerId) solo lo cambia quien puede asignar a la persona
-     nueva y a la anterior.
+   - Empresas y contactos: cualquier persona los crea. Un ejecutivo no cambia los datos de una
+     empresa que creó otra persona (pasa con grandes corporaciones, donde trabajan varios
+     ejecutivos): en ella solo agrega contactos, sitios, prospectos y oportunidades. Tampoco
+     cambia contactos que creó otra persona. Subgerente, gerente y administrador editan todo.
+     Trazabilidad: el servidor anota createdBy al crear y updatedBy/updatedAt en cada cambio
+     (la pantalla no puede cambiar esos campos), y «cambios» guarda la persona, el valor
+     anterior y el nuevo. El responsable de la empresa (ownerId) solo lo cambia quien puede
+     asignar a la persona nueva y a la anterior.
    - Eliminar o fusionar una empresa o un contacto: solo el administrador (y siempre que
      no tenga historial: ver validarBajas).
    - Configuración, modo y reemplazo completo de los datos: solo el administrador.
@@ -146,6 +149,16 @@ function permNo($ctx, $que, $tabla, $x, $extra = '') { $ctx->avisos[] = "No tien
 
 // Campos de trazabilidad de empresas y contactos: los pone el servidor
 const PERM_TRAZA = ['createdBy', 'updatedBy', 'updatedAt'];
+// ¿Puede cambiar esta empresa o contacto? Un ejecutivo, solo lo que creó; en una empresa ajena solo agrega sitios nuevos.
+function permEditaCompartido($ctx, $tabla, $antes, $x) {
+    if ($ctx->alc === null || $ctx->sub || permTxt($antes, 'createdBy') === $ctx->id) return true;
+    if ($tabla !== 'companies') return false;
+    $a = permCopia($antes); $b = permCopia($x);
+    $sa = permLista($a, 'sites'); $sb = permLista($b, 'sites');
+    if (count($sb) < count($sa) || json_encode(array_slice($sb, 0, count($sa))) !== json_encode($sa)) return false;   // los sitios que había no cambian
+    unset($a->sites, $b->sites);
+    return json_encode($a) === json_encode($b);
+}
 function permBorraCompartido($ctx, $x) { return $ctx->admin; }
 
 /* Aplica sobre $full (datos completos) la copia $nuevo que envió la pantalla de esta persona.
@@ -209,11 +222,12 @@ function permFusionarLista($tabla, $full, $previo, $nuevo, $ctx, $idx) {
         $antes = $F[$id];
         if ($compartida) {
             foreach (PERM_TRAZA as $c) { if (isset($antes->$c)) $x->$c = $antes->$c; else unset($x->$c); }
+            if ($j($x) === $j($antes)) continue;   // solo faltaban los campos de trazabilidad
+            if (!permEditaCompartido($ctx, $tabla, $antes, $x)) { permNo($ctx, 'cambiar los datos de', $tabla, $antes, $tabla === 'companies' ? ' (la creó otra persona: puedes agregarle contactos, sitios, prospectos y oportunidades)' : ' (lo creó otra persona)'); continue; }
             if ($tabla === 'companies' && permTxt($x, 'ownerId') !== permTxt($antes, 'ownerId')
                 && !(permAsignable($ctx, permTxt($x, 'ownerId')) && (permTxt($antes, 'ownerId') === '' || permEnAlcance($ctx, permTxt($antes, 'ownerId'))))) {
                 permNo($ctx, 'cambiar el responsable de', $tabla, $antes); continue;
             }
-            if ($j($x) === $j($antes)) continue;   // solo faltaban los campos de trazabilidad
             $x->updatedBy = $ctx->id; $x->updatedAt = date('c');
         } else {
             $da = permDueno($tabla, $antes, $idx); $dn = permDueno($tabla, $x, $idx);
