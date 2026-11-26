@@ -153,6 +153,7 @@ header .btn.pri{background:#fff;color:#0D2A46;border-color:#fff}
 .card.inv-ok{background:var(--ok-soft);border-left:4px solid var(--ok)}
 .card.inv-pend{background:var(--bad-soft);border-left:4px solid var(--bad)}
 .tbl tr.inv-ok td{background:var(--ok-soft)}
+.tbl tr.tot td{background:var(--surface-2)}
 .tbl tr.inv-pend td{background:var(--bad-soft)}
 .tbl tr.inv-ok td:first-child{box-shadow:inset 4px 0 0 var(--ok)}
 .tbl tr.inv-pend td:first-child{box-shadow:inset 4px 0 0 var(--bad)}
@@ -531,13 +532,20 @@ const metaFactura=()=>(S.config.metaBase||'factura')==='factura';
 const myInvoices=()=>{const ids=new Set(mine(S.opps).map(o=>o.id));return(S.invoices||[]).filter(x=>ids.has(x.oppId)&&invCounts(x))};
 const invoicedIn=pref=>sum(myInvoices().filter(x=>(x.date||'').startsWith(pref)),x=>x.net||0);
 const invoicedOfPrevBookings=yr=>sum(myInvoices().filter(x=>(x.date||'').startsWith(yr)&&((byId(S.opps,x.oppId)||{}).wonAt||'').slice(0,4)<yr),x=>x.net||0);
-const metaTarget=()=>seesAll()?sum(Object.values(S.config.targets||{})):((S.config.targets||{})[S.currentUser]||0);
+// Meta mensual del alcance: suma de las metas de las personas que entran (una persona, una subgerencia o toda la gerencia).
+// El servidor solo manda las metas que el rol puede ver: el ejecutivo la suya, el subgerente las de su equipo, el gerente todas.
+const metaDe=id=>Number((S.config.targets||{})[id])||0;
+const metaTarget=()=>sum(Object.keys(S.config.targets||{}).filter(enAlcance),metaDe);
 /* Meta de facturación por año, mes y línea de negocio (config.metas[año] = {venta:{SSFF:[12 meses CLP],…}, margen:{…}}),
    importada desde el Excel de presupuesto («MI META DE VENTA AAAA»). Si un año no tiene meta cargada se usa la meta
    mensual plana de Configuración. Líneas del presupuesto ↔ tipo de negocio del funnel. */
 const META_LINEAS=[['SSFF','Seguridad Física'],['SSII','Seguridad Integral'],['SSEE One Shot','One Shot'],['SSEE Servicio','Seguridad Electrónica']];
 const MESES=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-const metaAnual=yr=>{const m=(S.config.metas||{})[yr];return m&&m.venta&&Object.keys(m.venta).length?m:null};
+const metaPres=yr=>{const m=(S.config.metas||{})[yr];return m&&m.venta&&Object.keys(m.venta).length?m:null};
+const metaPresTotal=yr=>{const m=metaPres(yr);return m?sum(Object.values(m.venta),a=>sum(a,v=>Number(v)||0)):0};
+// La meta del Excel de presupuesto es de toda la gerencia: cuenta solo cuando el alcance es la gerencia completa.
+// Con una subgerencia o una persona se usa la suma de las metas por persona.
+const metaAnual=yr=>alcanceSet()?null:metaPres(yr);
 const metaMes=ym=>{const m=metaAnual(ym.slice(0,4));if(!m)return metaTarget();const i=Number(ym.slice(5,7))-1;return sum(Object.values(m.venta),a=>Number(a[i])||0)};
 const metaYear=yr=>{const m=metaAnual(yr);return m?sum(Object.values(m.venta),a=>sum(a,v=>Number(v)||0)):metaTarget()*12};
 const metaAcum=(yr,mi)=>sum(MESES.slice(0,mi+1).map((_,i)=>metaMes(yr+'-'+String(i+1).padStart(2,'0'))));
@@ -1119,7 +1127,7 @@ async function fileSave(filename,data){
  let d=null;if(hasUse()){try{d=await window.claude.use('downloads')}catch(e){d=null}}
  if(!d&&!hasUse()){
   // Fuera de Claude (sitio propio): descarga normal del navegador
-  try{const type=filename.endsWith('.csv')?'text/csv;charset=utf-8':'application/json';const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000);return 'ok'}catch(e){return 'na'}
+  try{const type=filename.endsWith('.csv')?'text/csv;charset=utf-8':filename.endsWith('.xlsx')?'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'application/json';const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000);return 'ok'}catch(e){return 'na'}
  }
  if(!d)return 'na';
  try{await d.save({filename,data});return 'ok'}catch(e){return e&&e.code==='declined'?'declined':e&&e.code==='rate_limited'?'busy':'na'}
@@ -1131,7 +1139,7 @@ async function downloadCSV(name,rows){
  if(r==='ok')toast('Archivo descargado. Ábrelo directamente en Excel.');else if(r==='declined')toast('Descarga cancelada.');else if(r==='busy')toast('Ya hay una descarga esperando tu confirmación.');else toast('La descarga no está disponible en esta vista. Usa «Copiar para Excel».');
 }
 function cleanSeed(){const base=seed();const yo=SES.yo&&STORE.mode==='servidor'?SES.yo:null;const users=yo?S.users:[{id:'u1',name:byId(S.users,'u1')?.name||'Administrador',role:'admin',roleLabel:'Administrador'}];const uid0=yo?yo.id:'u1';S.users=users;const p=makePlan('Retail',nextMonth(),uid0);return{v:5,mode:'real',lastBackup:'',plans:[p],users,currentUser:uid0,companies:[],contacts:[],leads:[],opps:[],activities:[],tasks:[],offers:[],invoices:[],recepciones:[],config:configDefault(),audit:[],seq:{opp:0,offer:0,lead:0}}}
-const UI={repFactYear:null,repFactState:'',repConvYear:'',repTab:'opps',prGran:'semana',prPer:'',repGran:'mes',repPer:'',leadPlan:'',leadStage:'',leadGrade:'',leadView:'kanban',leadCompany:'',actCompany:'',taskCompany:'',taskKind:'',oppView:'kanban',oppYear:'',oppOwner:'',oppStatus:'abierta',oppIndustry:'',actType:'',actUser:'',compInd:'',compRel:'',taskScope:'mine',planVert:'',planSel:{}};
+const UI={repFactYear:null,repFactState:'',repConvYear:'',repTab:'opps',prGran:'semana',prPer:'',repGran:'mes',repPer:'',leadPlan:'',leadStage:'',leadGrade:'',leadView:'kanban',leadCompany:'',actCompany:'',taskCompany:'',taskKind:'',oppView:'kanban',oppYear:'',oppOwner:'',oppStatus:'abierta',oppIndustry:'',actType:'',actUser:'',compInd:'',compRel:'',taskScope:'mine',planVert:'',planSel:{},alcance:''};
 let CUR=null;
 
 const me=()=>byId(S.users,S.currentUser)||{id:S.currentUser,name:'',role:'ejecutivo',roleLabel:''};
@@ -1142,7 +1150,23 @@ const esTodo=()=>{const u=me();return u.role==='gerente'||esAdmin()};
 const equipoDe=()=>{const u=me();if(esTodo())return null;if(u.role==='subgerente'&&u.equipo)return new Set(S.users.filter(x=>x.equipo===u.equipo).map(x=>x.id).concat(u.id));return new Set([u.id])};
 const seesAll=()=>esTodo()||me().role==='subgerente';
 const ownerOf=x=>x.ownerId||x.assigneeId;
-const mine=a=>{const e=equipoDe();return e?a.filter(x=>e.has(ownerOf(x))):a};
+// Selector de alcance (Fase 1, punto 6): '' = todo lo que el rol ve; 'yo' = la cartera propia del subgerente;
+// 'eq:<equipo>' = una subgerencia; 'u:<id>' = una persona. Solo achica lo que el rol ya ve (el servidor no manda lo
+// demás): nunca lo amplía. El ejecutivo no tiene selector.
+function alcanceOpts(){const u=me(),e=equipoDe();if(e&&e.size<2)return [];
+ const per=S.users.filter(x=>x.activo!==false&&x.role!=='admin'&&x.role!=='gerente'&&!x.admin&&(!e||e.has(x.id)));
+ const o=[['',e?'Subgerencia '+(u.equipo||'')+' completa':'Toda la gerencia']];
+ if(e)o.push(['yo','Mi cartera']);else [...new Set(per.map(x=>x.equipo).filter(Boolean))].sort().forEach(q=>o.push(['eq:'+q,'Subgerencia '+q]));
+ per.filter(x=>!e||x.id!==u.id).sort((a,b)=>(a.equipo||'').localeCompare(b.equipo||'')||(a.role==='subgerente'?0:1)-(b.role==='subgerente'?0:1)||a.name.localeCompare(b.name)).forEach(x=>o.push(['u:'+x.id,x.name+(!e&&x.equipo?' · '+x.equipo:'')]));
+ return o}
+const alcanceVal=()=>{const v=UI.alcance||'';return v&&alcanceOpts().some(([k])=>k===v)?v:''};
+function alcanceSet(){const e=equipoDe(),v=alcanceVal();let s=null;
+ if(v==='yo')s=new Set([S.currentUser]);else if(v.startsWith('u:'))s=new Set([v.slice(2)]);else if(v.startsWith('eq:')){const q=v.slice(3);s=new Set(S.users.filter(x=>x.equipo===q).map(x=>x.id))}
+ if(!s)return e;return e?new Set([...s].filter(x=>e.has(x))):s}
+const alcanceLabel=()=>{const o=alcanceOpts();if(!o.length)return 'Tu cartera';const v=alcanceVal();return(o.find(([k])=>k===v)||o[0])[1]};
+const alcanceSel=()=>{const o=alcanceOpts();return o.length?`<select data-filter="alcance" aria-label="Alcance">${opt(o,alcanceVal())}</select>`:''};
+const enAlcance=id=>{const e=alcanceSet();return !e||e.has(id)};
+const mine=a=>{const e=alcanceSet();return e?a.filter(x=>e.has(ownerOf(x))):a};
 const canEdit=x=>{const e=equipoDe();return !e||e.has(ownerOf(x))};
 // Personas a las que se puede asignar algo: el ejecutivo, a sí mismo; el subgerente, a su equipo; gerente y administrador, a cualquiera activo
 const asignables=()=>{const e=equipoDe();return S.users.filter(u=>u.activo!==false&&(!e||e.has(u.id)))};
@@ -1436,7 +1460,7 @@ function viewHoy(){
  const won=opps.filter(o=>o.status==='ganada'&&(o.wonAt||'').startsWith(month));
  const sold=sum(won,tcv);
  const yr=todayIso.slice(0,4);const facY=invoicedIn(yr),facM=invoicedIn(month),facPrev=invoicedOfPrevBookings(yr);
- const target=metaFactura()?metaMes(month):(seesAll()?sum(Object.values(S.config.targets)):(S.config.targets[u.id]||0));
+ const target=metaFactura()?metaMes(month):metaTarget();
  const metaY=metaYear(yr),esperado=metaAcum(yr,Number(month.slice(5,7))-1);
  const logro=metaFactura()?facM:sold;const pct=target?Math.round(logro/target*100):0;
  const in30=addDays(30);const closing=open.filter(o=>o.closeDate&&o.closeDate>=todayIso&&o.closeDate<=in30).sort((a,b)=>weighted(b)-weighted(a));
@@ -1447,7 +1471,7 @@ function viewHoy(){
  const riskOpps=new Set(risk.map(a=>a.id)).size;
  const offerAl=al.filter(a=>a.group==='oferta');
  const leadAl=al.filter(a=>a.entity==='lead');const clientAl=al.filter(a=>a.group==='cliente').sort((a,b)=>SEV_RANK[a.sev]-SEV_RANK[b.sev]);
- const meets=S.activities.filter(a=>MEETING_TYPES.includes(a.type)&&a.date>=todayIso&&(seesAll()||a.userId===S.currentUser)).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,5);
+ const meets=S.activities.filter(a=>MEETING_TYPES.includes(a.type)&&a.date>=todayIso&&(seesAll()||a.userId===S.currentUser)&&enAlcance(a.userId)).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,5);
  const hr=new Date().getHours();const greet=hr<12?'Buenos días':hr<20?'Buenas tardes':'Buenas noches';
  const myPlans=mine(S.plans||[]).filter(p=>p.status!=='Cerrado');
  const planHtml=myPlans.map(p=>{if(p.status==='Borrador')return `<button class="row-item sev-info" data-action="goPlan" data-id="${p.id}"><span class="dot"></span><span class="ri-main"><strong>${esc(p.name)}</strong><span class="muted sm">En borrador con ${p.targets.length} empresas objetivo. Revísalo y actívalo para programar la cadencia.</span></span></button>`;const g=planProgress(p);const tt=S.tasks.filter(t=>t.planId===p.id&&isOpenTask(t)&&t.due<=todayIso).length;return `<button class="row-item sev-${g.pct<g.expected-10?'warn':'ok'}" data-action="goPlan" data-id="${p.id}"><span class="dot"></span><span class="ri-main"><strong>${esc(p.name)}</strong><span class="muted sm">${g.pct}% de las metas con ${g.expected}% ${planUnit(p)} transcurrido. Llamadas ${g.r.llamadas} de ${p.goals.llamadas}, reuniones ${g.r.reuniones} de ${p.goals.reuniones}, oportunidades ${g.r.oportunidades} de ${p.goals.oportunidades}.</span></span><span class="ri-right">${tt?`<span class="b b-warn">${tt} tareas hoy</span>`:''}</span></button>`}).join('');
@@ -1501,7 +1525,7 @@ function viewLeads(){
  const comps=[...new Set(todos.map(l=>l.companyId))].map(id=>[id,cname(id)]).sort((a,b)=>a[1].localeCompare(b[1],'es'));
  const activos=ls.filter(l=>LEAD_ACTIVE.includes(l.stage));
  const head=`<div class="page-h"><div><h1>Prospectos</h1><p class="sub">${activos.length} en prospección${UI.leadCompany?' en '+esc(cname(UI.leadCompany)):''}. ${UI.leadView==='tabla'?'Ordenados por score.':'Arrastra para cambiar de etapa; las salidas están abajo.'}</p></div><div class="d-actions">${(()=>{const n=leadsSinContacto().filter(l=>!S.activities.some(a=>a.entityType==='lead'&&a.entityId===l.id)).length;return n?`<button class="btn" data-action="toLeadsPlan">Devolver ${n} sin contacto a su plan</button>`:''})()}<button class="btn" data-action="export" data-what="leads">Exportar</button><button class="btn pri" data-action="newLead">+ Nuevo prospecto</button></div></div>
- <div class="toolbar"><div class="seg"><button class="${UI.leadView!=='tabla'?'on':''}" data-action="setUI" data-k="leadView" data-v="kanban">Kanban</button><button class="${UI.leadView==='tabla'?'on':''}" data-action="setUI" data-k="leadView" data-v="tabla">Tabla</button></div>
+ <div class="toolbar"><div class="seg"><button class="${UI.leadView!=='tabla'?'on':''}" data-action="setUI" data-k="leadView" data-v="kanban">Kanban</button><button class="${UI.leadView==='tabla'?'on':''}" data-action="setUI" data-k="leadView" data-v="tabla">Tabla</button></div>${alcanceSel()}
  <select data-filter="leadCompany" aria-label="Cliente">${opt(comps,UI.leadCompany,'Todos los clientes')}</select>
  <select data-filter="leadGrade" aria-label="Prioridad">${opt([['','Todas las prioridades'],['A','Prioridad A'],['B','Prioridad B'],['C','Prioridad C']],UI.leadGrade)}</select>${(S.plans||[]).length?`<select data-filter="leadPlan" aria-label="Plan">${opt(S.plans.map(p=>[p.id,p.name]),UI.leadPlan,'Todos los planes')}</select>`:''}</div>`;
  if(UI.leadView!=='tabla'){
@@ -1698,7 +1722,7 @@ function oppCard(o){
   <div class="c-next ${miss.length?'bad':''}">${(()=>{const t=nextTask(o);return t?esc(t.title)+', '+fmtDate(t.due)+(t.due<todayIso?' (vencida)':''):o.status==='abierta'?'Sin tarea pendiente':'Sin tareas pendientes'})()}</div>
  </div>`;
 }
-function filteredOpps(){let os=mine(S.opps);if(UI.oppOwner)os=os.filter(o=>o.ownerId===UI.oppOwner);if(UI.oppIndustry)os=os.filter(o=>byId(S.companies,o.companyId)?.industry===UI.oppIndustry);return os}
+function filteredOpps(){let os=mine(S.opps);if(UI.oppIndustry)os=os.filter(o=>byId(S.companies,o.companyId)?.industry===UI.oppIndustry);return os}
 // Años que se pueden ver en el Kanban: el actual, los de Booking y los de facturas
 function kanbanYears(){const ys=new Set([todayIso.slice(0,4)]);mine(S.opps).forEach(o=>{if(o.status==='ganada'&&o.wonAt)ys.add(o.wonAt.slice(0,4))});myInvoices().forEach(x=>{if(x.date)ys.add(x.date.slice(0,4))});return[...ys].sort().reverse()}
 function viewOpps(){
@@ -1707,9 +1731,9 @@ function viewOpps(){
  const ausentes=open.filter(fxAusente);
 
  const avisoAus=ausentes.length?`<div class="warnbox warn" style="margin-bottom:12px"><strong>${ausentes.length} oportunidad${ausentes.length>1?'es':''} abierta${ausentes.length>1?'s':''} ${ausentes.length>1?'no vinieron':'no vino'} en la última importación del funnel.</strong> Siguen aquí con su historial y suman al pipeline. Revisa con Gerencia si siguen vigentes. ${ausentes.map(o=>`<a href="#" data-action="open" data-type="opp" data-id="${o.id}">${esc(cname(o.companyId))}: ${esc(o.name)} (desde ${esc(fmtDate(o.fx.ausente))})</a>`).join(' · ')}</div>`:'';
- const head=`<div class="page-h"><div><h1>Oportunidades</h1><p class="sub">${open.length} abiertas por ${mm(sum(open,tcv))}, ponderado ${mm(sum(open,weighted))}. Se crean y gestionan aquí, con código OP automático.</p></div><div class="d-actions"><button class="btn pri" data-action="newOpp">Nueva oportunidad</button><button class="btn" data-action="export" data-what="opps">Exportar</button></div></div>
+ const head=`<div class="page-h"><div><h1>Oportunidades</h1><p class="sub">${open.length} abiertas por ${mm(sum(open,tcv))}, ponderado ${mm(sum(open,weighted))}. Se crean y gestionan aquí, con código OP automático.</p></div><div class="d-actions"><button class="btn pri" data-action="newOpp">Nueva oportunidad</button><button class="btn" data-action="exportFunnel">Exportar funnel (formato Gerencia)</button><button class="btn" data-action="export" data-what="opps">Exportar</button></div></div>
  <div class="toolbar"><div class="seg"><button class="${UI.oppView==='kanban'?'on':''}" data-action="setUI" data-k="oppView" data-v="kanban">Kanban</button><button class="${UI.oppView==='tabla'?'on':''}" data-action="setUI" data-k="oppView" data-v="tabla">Tabla</button></div>
- ${seesAll()?`<select data-filter="oppOwner" aria-label="Responsable">${opt(S.users.map(u=>[u.id,u.name]),UI.oppOwner,'Todos los ejecutivos')}</select>`:''}
+ ${alcanceSel()}
  <select data-filter="oppIndustry" aria-label="Industria">${opt(INDUSTRIES,UI.oppIndustry,'Todas las industrias')}</select>
  ${UI.oppView==='kanban'?`<select data-filter="oppYear" aria-label="Año de Booking y facturación">${opt(kanbanYears().map(y=>[y,'Año '+y]),UI.oppYear||todayIso.slice(0,4))}</select>`:''}
  ${UI.oppView==='tabla'?`<select data-filter="oppStatus" aria-label="Estado">${opt([['abierta','Abiertas'],['ganada','Ganadas'],['perdida','Perdidas'],['postergada','Postergadas'],['','Todas']],UI.oppStatus)}</select>`:''}</div>`;
@@ -1829,14 +1853,14 @@ function drawerOffer(id){
 /* ============ VISTA: ACTIVIDADES ============ */
 const actRow=a=>({...a,_ref:refBadge(a.entityType,a.entityId),desc:a.desc+' ('+(a.entityType==='company'?cname(a.entityId):cname(a.companyId)+(a.entityType==='lead'?', '+(byId(S.leads,a.entityId)?.name||'prospecto'):a.entityType==='opp'?', '+(byId(S.opps,a.entityId)?.name||''):''))+')'});
 function viewActivities(){
- let as=S.activities.filter(a=>seesAll()||a.userId===S.currentUser);
+ let as=S.activities.filter(a=>(seesAll()||a.userId===S.currentUser)&&enAlcance(a.userId));
  if(UI.actType)as=as.filter(a=>a.type===UI.actType);
  if(UI.actUser)as=as.filter(a=>a.userId===UI.actUser);
  const actComps=[...new Set(as.map(a=>a.companyId).filter(Boolean))].map(id=>[id,cname(id)]).sort((a,b)=>a[1].localeCompare(b[1],'es'));
  if(UI.actCompany)as=as.filter(a=>a.companyId===UI.actCompany);
  const past=as.filter(a=>a.date<=todayIso),fut=as.filter(a=>a.date>todayIso);
  return `<div class="page-h"><div><h1>Actividades</h1><p class="sub">${past.filter(a=>daysFrom(a.date)<=7).length} gestiones en los últimos 7 días, ${fut.length} agendadas.</p></div><div class="d-actions"><button class="btn" data-action="export" data-what="activities">Exportar</button><button class="btn" data-action="newMeeting">Agendar reunión</button><button class="btn pri" data-action="quick">+ Registrar actividad</button></div></div>
- <div class="toolbar"><select data-filter="actCompany" aria-label="Cliente">${opt(actComps,UI.actCompany,'Todos los clientes')}</select><select data-filter="actType" aria-label="Tipo">${opt(ACT_TYPES,UI.actType,'Todos los tipos')}</select>${seesAll()?`<select data-filter="actUser" aria-label="Usuario">${opt(S.users.map(u=>[u.id,u.name]),UI.actUser,'Todos los usuarios')}</select>`:''}</div>
+ <div class="toolbar">${alcanceSel()}<select data-filter="actCompany" aria-label="Cliente">${opt(actComps,UI.actCompany,'Todos los clientes')}</select><select data-filter="actType" aria-label="Tipo">${opt(ACT_TYPES,UI.actType,'Todos los tipos')}</select>${seesAll()?`<select data-filter="actUser" aria-label="Usuario">${opt(S.users.map(u=>[u.id,u.name]),UI.actUser,'Todos los usuarios')}</select>`:''}</div>
  <div class="grid2p"><div class="section" style="margin-top:0"><h2>Registradas</h2>${timeline(past.map(actRow))}</div><div class="section" style="margin-top:0"><h2>Agendadas</h2>${timeline(fut.map(actRow))}</div></div>`;
 }
 
@@ -1974,7 +1998,7 @@ function viewReports(){
  if(UI.repTab==='conv')return repTabs()+viewConvReport();
  return repTabs()+viewReportsOpps();
 }
-function repTabs(){return `<div class="page-h"><div><h1>Reportes</h1><p class="sub">${seesAll()?'Todo el equipo':'Tu gestión'}.</p></div><div class="seg" role="tablist" aria-label="Reporte">${[['opps','Oportunidades'],['fact','Facturación de Booking'],['conv','Prospectos convertidos'],['prosp','Prospección y actividades']].map(([v,l])=>`<button class="${(UI.repTab||'opps')===v?'on':''}" data-action="repTab" data-v="${v}">${l}</button>`).join('')}</div></div>`}
+function repTabs(){return `<div class="page-h"><div><h1>Reportes</h1><p class="sub">${esc(alcanceLabel())}.</p></div><div class="d-actions">${alcanceSel()}<div class="seg" role="tablist" aria-label="Reporte">${[['opps','Oportunidades'],['fact','Facturación de Booking'],['conv','Prospectos convertidos'],['prosp','Prospección y actividades']].map(([v,l])=>`<button class="${(UI.repTab||'opps')===v?'on':''}" data-action="repTab" data-v="${v}">${l}</button>`).join('')}</div></div></div>`}
 /* ---------- Informe: oportunidades cerradas (Booking) y su facturación ---------- */
 // Período del informe = año de facturación (fecha de la factura). Por defecto el año en curso; '' = todo.
 const factYear=()=>UI.repFactYear===null?todayIso.slice(0,4):UI.repFactYear;
@@ -2052,6 +2076,30 @@ function viewConvReport(){
  <div class="panel tbl-wrap" style="margin-top:12px"><table class="tbl"><thead><tr><th>Prospecto</th><th>Empresa</th><th>Fuente</th><th>Creado</th><th>Convertido</th><th class="num">Días</th><th>Oportunidad</th><th>Estado</th><th class="num">Monto</th><th class="num">Facturado</th></tr></thead><tbody>
  ${R.map(x=>`<tr class="click" data-action="open" data-type="${x.o?'opp':'lead'}" data-id="${x.o?x.o.id:x.l.id}"><td><strong>${esc(x.l.name||x.l.service||'Prospecto')}</strong><br><span class="muted sm">${esc(x.l.code||'')}</span></td><td>${esc(cname(x.l.companyId))}</td><td>${esc(x.l.source||'—')}</td><td>${fmtDate(x.l.createdAt)}</td><td>${fmtDate(x.conv)}</td><td class="num">${x.dias??'—'}</td><td>${x.o?esc(x.o.code):'—'}</td><td>${convState(x)}</td><td class="num">${x.o?mm(x.monto):'—'}</td><td class="num">${x.fac?mm(x.fac):'—'}</td></tr>`).join('')||`<tr><td colspan="10">${emptyMsg('Ningún prospecto se ha convertido en oportunidad en este período.')}</td></tr>`}
  </tbody></table></div>`}
+// Metas por persona sumadas a la subgerencia y a la gerencia (Fase 1, punto 6). Cada rol ve las personas de su alcance
+// (el servidor no manda las demás metas) y el selector de alcance achica la tabla. Lo logrado se mide igual que la meta:
+// por factura (neto emitido o pagado, por fecha de emisión) o por Booking (TCV adjudicado, por fecha de cierre).
+function logroDe(ids,pref){
+ if(metaFactura())return sum((S.invoices||[]).filter(x=>invCounts(x)&&(x.date||'').startsWith(pref)&&ids.has((byId(S.opps,x.oppId)||{}).ownerId)),x=>x.net||0);
+ return sum(S.opps.filter(o=>o.status==='ganada'&&enFunnel(o)&&(o.wonAt||'').startsWith(pref)&&ids.has(o.ownerId)),tcv)}
+function metasEquipo(){
+ const t=S.config.targets||{},month=todayIso.slice(0,7),yr=month.slice(0,4),nm=Number(month.slice(5,7));
+ const per=S.users.filter(u=>enAlcance(u.id)&&(seesAll()||u.id===S.currentUser)&&(metaDe(u.id)>0||['ejecutivo','subgerente'].includes(u.role)));
+ const fila=(tipo,lab,ids,extra)=>{const mes=sum([...ids],metaDe);return{tipo,lab,ids:[...ids],mes,lm:logroDe(ids,month),ma:mes*nm,la:logroDe(ids,yr),...extra}};
+ const eqs=[...new Set(per.map(u=>u.equipo||''))].sort((a,b)=>(a?0:1)-(b?0:1)||a.localeCompare(b));const out=[];
+ for(const q of eqs){const ps=per.filter(u=>(u.equipo||'')===q).sort((a,b)=>(a.role==='subgerente'?0:1)-(b.role==='subgerente'?0:1)||a.name.localeCompare(b.name));
+  ps.forEach(u=>out.push(fila('persona',u.name,new Set([u.id]),{sub:u.role==='subgerente'})));
+  if(ps.length>1)out.push(fila('subgerencia',q?'Subgerencia '+q:'Sin subgerencia',new Set(ps.map(u=>u.id))))}
+ if(eqs.length>1)out.push(fila('gerencia','Gerencia',new Set(per.map(u=>u.id))));
+ return out}
+function metasEquipoSection(){
+ const F=metasEquipo();if(!F.length||!F.some(f=>f.mes))return '';
+ const month=todayIso.slice(0,7),yr=month.slice(0,4),pc=(a,b)=>b?Math.round(a/b*100)+'%':'—';
+ const pres=metaAnual(yr);
+ return `<h2 style="margin:0 0 8px">Metas por persona y equipo</h2>
+ <div class="panel tbl-wrap" style="margin-bottom:16px"><table class="tbl"><thead><tr><th>Persona o equipo</th><th class="num">Meta del mes</th><th class="num">Logrado del mes</th><th class="num">%</th><th class="num">Meta ${yr} a la fecha</th><th class="num">Logrado ${yr}</th><th class="num">%</th></tr></thead><tbody>
+ ${F.map(f=>{const b=s=>f.tipo==='persona'?s:`<strong>${s}</strong>`;return `<tr class="${f.tipo==='persona'?'':'tot'}" data-meta="${esc(f.tipo)}"><td>${b(esc(f.lab))}${f.sub?' <span class="muted sm">cartera propia</span>':''}</td><td class="num">${b(mm(f.mes))}</td><td class="num">${b(f.lm?mm(f.lm):'—')}</td><td class="num">${b(pc(f.lm,f.mes))}</td><td class="num">${b(mm(f.ma))}</td><td class="num">${b(f.la?mm(f.la):'—')}</td><td class="num">${b(pc(f.la,f.ma))}</td></tr>`}).join('')}
+ </tbody></table><p class="muted sm" style="margin:8px 10px">Meta mensual de cada persona (Configuración); la subgerencia suma a su subgerente y su equipo, y la gerencia suma las subgerencias. Se mide por ${metaFactura()?'factura: neto emitido o pagado, por fecha de emisión':'Booking: TCV adjudicado, por fecha de cierre'}.${pres?` La meta ${yr} del Excel de presupuesto, para toda la gerencia, es ${mm(metaPresTotal(yr))}.`:''}</p></div>`}
 function viewReportsOpps(){
  const os=mine(S.opps).filter(enFunnel);const open=os.filter(o=>o.status==='abierta');const won=os.filter(o=>o.status==='ganada');const lost=os.filter(o=>o.status==='perdida');
  const year=todayIso.slice(0,4);const wonY=won.filter(o=>(o.wonAt||'').startsWith(year));
@@ -2059,12 +2107,12 @@ function viewReportsOpps(){
  const ticket=won.length?sum(won,tcv)/won.length:0;
  const cycle=won.length?Math.round(sum(won,o=>(parse(o.wonAt)-parse(o.createdAt))/86400000)/won.length):0;
  const ls=mine(S.leads);const conv=ls.length?Math.round(ls.filter(l=>l.stage==='Oportunidad creada').length/ls.length*100):0;
- const month=todayIso.slice(0,7);const target=metaFactura()?metaMes(month):(seesAll()?sum(Object.values(S.config.targets)):(S.config.targets[S.currentUser]||0));
+ const month=todayIso.slice(0,7);const target=metaFactura()?metaMes(month):metaTarget();
  const soldM=metaFactura()?invoicedIn(month):sum(won.filter(o=>(o.wonAt||'').startsWith(month)),tcv);const remain=Math.max(target-soldM,0);
  const coverage=remain?(sum(open,weighted)/remain):0;
  const bars=(rows,alt)=>{const max=Math.max(...rows.map(r=>r[1]),1);return `<div class="bars">${rows.map(r=>`<div class="bar-row"><span>${esc(r[0])}</span><span class="track"><i class="${alt?'alt':''}" style="width:${r[1]/max*100}%"></i></span><span class="num">${r[2]??mm(r[1])}</span></div>`).join('')||emptyMsg('Sin datos.')}</div>`};
  const byStage=FUNNEL_STAGES.filter(s=>s.id!=='adjudicada').map(s=>{const l=open.filter(o=>o.stage===s.id);return[s.name,sum(l,tcv),`${mm(sum(l,tcv))} (${l.length})`]});
- const byUser=S.users.map(u=>[u.name,sum(wonY.filter(o=>o.ownerId===u.id),tcv)]).filter(r=>seesAll()||r[0]===me().name);
+ const byUser=S.users.filter(u=>(seesAll()||u.id===S.currentUser)&&enAlcance(u.id)).map(u=>[u.name,sum(wonY.filter(o=>o.ownerId===u.id),tcv)]);
  const inds=[...new Set(wonY.map(o=>byId(S.companies,o.companyId)?.industry))];
  const byInd=inds.map(i=>[i,sum(wonY.filter(o=>byId(S.companies,o.companyId)?.industry===i),tcv)]).sort((a,b)=>b[1]-a[1]);
  const reasons={};lost.forEach(o=>reasons[o.lossReason]=(reasons[o.lossReason]||0)+1);
@@ -2072,7 +2120,8 @@ function viewReportsOpps(){
  const months=[0,1,2,3].map(i=>{const d=new Date(TODAY.getFullYear(),TODAY.getMonth()+i,1);return iso(d).slice(0,7)});
  const fc=months.map(m=>{const l=open.filter(o=>(o.closeDate||'').startsWith(m));return{m,commit:sum(l.filter(o=>forecastCat(o)==='Commit'),tcv),best:sum(l.filter(o=>forecastCat(o)==='Best Case'),tcv),pipe:sum(l.filter(o=>forecastCat(o)==='Pipeline'),tcv),w:sum(l,weighted),won:sum(won.filter(o=>(o.wonAt||'').startsWith(m)),tcv)}});
  const mName=m=>parse(m+'-01').toLocaleDateString('es-CL',{month:'long',year:'numeric'});
- return `<div class="toolbar" style="justify-content:space-between"><p class="sub" style="margin:0">Montos en TCV (CLP).</p><button class="btn" data-action="export" data-what="opps">Exportar oportunidades</button></div>
+ return `<div class="toolbar" style="justify-content:space-between"><p class="sub" style="margin:0">Montos en TCV (CLP).</p><div class="d-actions"><button class="btn" data-action="exportFunnel">Exportar funnel (formato Gerencia)</button><button class="btn" data-action="export" data-what="opps">Exportar oportunidades</button></div></div>
+ ${metasEquipoSection()}
  ${periodSection(os)}
  <h2 style="margin:0 0 10px">Situación actual</h2>
  <div class="kpis"><div class="kpi"><div class="l">Ventas del año</div><div class="v">${mm(sum(wonY,tcv))}</div><div class="h">${wonY.length} negocios</div></div>${(()=>{const ids=new Set(os.map(o=>o.id));const l=(S.invoices||[]).filter(x=>ids.has(x.oppId)&&(x.date||'').startsWith(year));const f=l.filter(invCounts);const prev=invoicedOfPrevBookings(year);return `<div class="kpi"><div class="l">Facturado del año</div><div class="v">${mm(sum(f,x=>x.net))}</div><div class="h">neto, ${f.length} facturas${prev?'; '+mm(prev)+' de Booking de años anteriores':''}; por cobrar ${mm(sum(l.filter(x=>x.status==='Emitida'),x=>x.total))} con IVA</div></div>`})()}<div class="kpi"><div class="l">Win rate</div><div class="v">${winRate}%</div><div class="h">${won.length} ganadas, ${lost.length} perdidas</div></div><div class="kpi"><div class="l">Ticket promedio</div><div class="v">${mm(ticket)}</div></div><div class="kpi"><div class="l">Ciclo promedio</div><div class="v">${cycle} días</div><div class="h">creación a adjudicación</div></div><div class="kpi"><div class="l">Cobertura de pipeline</div><div class="v ${coverage<3?'warn':''}">${coverage.toFixed(1)}x</div><div class="h">ponderado vs meta restante del mes</div></div><div class="kpi"><div class="l">Conversión lead a oportunidad</div><div class="v">${conv}%</div></div></div>
@@ -2104,7 +2153,7 @@ function viewConfig(){
   ${[['a_on','on','Automatizaciones activas'],['a_idle','idle',`Sin gestión sobre el plazo de su tipo (general: ${R.oppNoAct.warn} días) → tarea urgente «Contactar al cliente»`],['a_follow','follow',`Oferta entregada (Upside) sin seguimiento en el plazo de recordatorio de su tipo (general: ${R.followup.remind} días) → tarea «Seguimiento de la oferta»`],['a_noTask','noTask','Oportunidad sin tarea pendiente → tarea «Definir la próxima gestión»'],['a_stage','stage','El Excel la pasa a Forecast o Booking → tarea de contrato u OC / traspaso a operaciones']].map(([n,k,l])=>`<label class="f full" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" class="chk" name="${n}" ${(R.auto||{})[k]?'checked':''}> ${esc(l)}</label>`).join('')}
  </div><p class="muted sm">Los días usan los umbrales de «Oportunidades y prospectos» y de «Seguimiento de ofertas entregadas».</p></div>
  <div class="section"><h2>Meta de facturación por año</h2><p class="muted sm" style="margin:0 0 8px">Importa el Excel de presupuesto (hoja con «MI META DE VENTA AAAA»): carga la meta de cada mes por línea de negocio y la meta de margen. Los meses sin meta importada usan la meta mensual de abajo.</p>
-  ${Object.keys(R.metas||{}).sort().map(y=>{const m=metaAnual(y);if(!m)return '';return `<div class="row-item"><span class="ri-main"><strong>Meta ${esc(y)}: ${mm(metaYear(y))}</strong><span class="muted sm">${META_LINEAS.filter(([k])=>m.venta[k]).map(([k])=>esc(k)+' '+mm(sum(m.venta[k]))).join(' · ')}${m.fuente?' · desde '+esc(m.fuente):''}${m.importado?' el '+fmtDate(m.importado):''}</span></span>${admin?`<span class="ri-right"><button type="button" class="btn sm danger" data-action="metaBorrar" data-y="${esc(y)}">Quitar</button></span>`:''}</div>`}).join('')||'<p class="muted sm">Sin metas importadas.</p>'}
+  ${Object.keys(R.metas||{}).sort().map(y=>{const m=metaPres(y);if(!m)return '';return `<div class="row-item"><span class="ri-main"><strong>Meta ${esc(y)}: ${mm(metaPresTotal(y))}</strong><span class="muted sm">${META_LINEAS.filter(([k])=>m.venta[k]).map(([k])=>esc(k)+' '+mm(sum(m.venta[k]))).join(' · ')}${m.fuente?' · desde '+esc(m.fuente):''}${m.importado?' el '+fmtDate(m.importado):''}</span></span>${admin?`<span class="ri-right"><button type="button" class="btn sm danger" data-action="metaBorrar" data-y="${esc(y)}">Quitar</button></span>`:''}</div>`}).join('')||'<p class="muted sm">Sin metas importadas.</p>'}
   ${admin?'<label class="btn" style="cursor:pointer;margin-top:8px">Importar meta desde Excel de presupuesto<input type="file" accept=".xlsx" data-meta hidden></label>':''}</div>
  <div class="section"><h2>Indicadores y metas mensuales</h2><div class="fgrid"><label class="f">Valor UF (CLP)<input type="number" step="any" name="uf" value="${R.uf}"><span class="hint">En producción se actualiza a diario de forma automática.</span></label><label class="f">Valor USD (CLP)<input type="number" step="any" name="usd" value="${R.usd}"></label>${`<label class="f">La meta se mide por<select name="metaBase"><option value="factura"${(R.metaBase||'factura')==='factura'?' selected':''}>Factura: neto facturado, por fecha de emisión</option><option value="booking"${R.metaBase==='booking'?' selected':''}>Booking: TCV adjudicado, por fecha de cierre</option></select><span class="hint">Con factura, un Booking de un año anterior facturado este año suma a la meta de este año.</span></label>`+S.users.filter(u=>u.role!=='gerente').map(u=>`<label class="f">Meta mensual ${esc(u.name)} (CLP)<input type="number" step="any" name="t_${u.id}" value="${R.targets[u.id]||0}"></label>`).join('')}</div></div>
  ${admin?'<div class="form-foot"><button class="btn pri" type="submit">Guardar configuración</button></div>':''}<p class="sm muted" style="margin-top:6px">${STORE.mode==='servidor'?'Estos parámetros se guardan en el servidor, en datos/ajustes.json.php, aparte del programa y de tus datos: se mantienen al actualizar el CRM o restaurar un respaldo.':'Estos parámetros se guardan en este navegador, aparte de tus datos: se mantienen al actualizar el CRM o restaurar un respaldo.'}</p>
@@ -2387,7 +2436,7 @@ const ACTIONS={
  wonOpp:d=>openWon(d.id),
  recForm:d=>{const o=byId(S.opps,d.id);if(!o)return;if(o.status!=='ganada'&&!recOf(o.id))return toast('El acta de recepción se prepara en oportunidades en Booking.');openModal(recForm(o.id))},
  recDoc:d=>{const o=byId(S.opps,d.id);const r=o&&recOf(o.id);if(!r)return toast('Primero prepara el acta.');const w=window.open('','_blank');if(!w)return toast('El navegador bloqueó la pestaña nueva. Permite las ventanas emergentes para este sitio.');w.document.open();w.document.write(recHtml(o,r));w.document.close()},
- metaUsar:()=>{const m=META_PEND;if(!m)return closeModal();S.config.metas=S.config.metas||{};const antes=metaAnual(m.yr)?metaYear(m.yr):'';S.config.metas[m.yr]={venta:m.venta,margen:m.margen||{},fuente:m.fuente||'',importado:todayIso};audit('Configuración','Meta '+m.yr,antes,metaYear(m.yr));META_PEND=null;save();saveAjustes();closeModal();render();toast(`Meta ${m.yr} cargada: ${mm(metaYear(m.yr))}.`)},
+ metaUsar:()=>{const m=META_PEND;if(!m)return closeModal();S.config.metas=S.config.metas||{};const antes=metaPres(m.yr)?metaPresTotal(m.yr):'';S.config.metas[m.yr]={venta:m.venta,margen:m.margen||{},fuente:m.fuente||'',importado:todayIso};audit('Configuración','Meta '+m.yr,antes,metaYear(m.yr));META_PEND=null;save();saveAjustes();closeModal();render();toast(`Meta ${m.yr} cargada: ${mm(metaYear(m.yr))}.`)},
  metaBorrar:d=>{if(!S.config.metas||!S.config.metas[d.y])return;audit('Configuración','Meta '+d.y,metaYear(d.y),'');delete S.config.metas[d.y];save();saveAjustes();render();toast(`Meta ${d.y} quitada. Ese año usa la meta mensual de Configuración.`)},
  newInvoice:d=>{const o=byId(S.opps,d.id);if(!o)return;if(o.status!=='ganada')return toast('Las facturas se registran en oportunidades en Booking.');openModal(invoiceForm(o.id))},
  editInvoice:d=>{const x=byId(S.invoices||[],d.id);if(x)openModal(invoiceForm(x.oppId,x.id))},
@@ -2404,6 +2453,8 @@ const ACTIONS={
   save();render();toast(msg)},
  newVersion:d=>{const f=byId(S.offers,d.id);const cur=f.versions[f.versions.length-1];openModal(`<h1 style="font-size:20px">Nueva versión de ${esc(f.code)}</h1><p class="sub sm">La V${cur.n} queda bloqueada en el historial.</p><form data-form="version" data-id="${f.id}" style="margin-top:12px"><div class="fgrid"><label class="f">Monto neto V${cur.n+1} (CLP)<input type="number" min="0" step="any" name="net" value="${cur.net}" required></label><label class="f full">Qué cambió<textarea name="note" required placeholder="Por ejemplo: ajuste de dotación a pedido del cliente"></textarea></label></div><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Crear versión</button></div></form>`)},
  export:d=>doExport(d.what),
+ exportFunnel:()=>exportFunnel(),
+ dlFunnel:()=>dlFunnel(),
  dlExport:()=>{if(LAST_EXPORT)downloadCSV(LAST_EXPORT.name,LAST_EXPORT.rows)},
  askKey:()=>pedirEntrada(''),
  miCuenta:()=>miCuenta(),
@@ -2623,6 +2674,81 @@ function doExport(what){
  LAST_EXPORT={name:`crm-${title.toLowerCase()}-${todayIso}.csv`,rows};
  openModal(`<h1 style="font-size:20px">Exportar ${esc(title.toLowerCase())}</h1><p class="sub sm">${rows.length} registros. Descarga un CSV que Excel abre directamente, o copia los datos y pégalos en una planilla.</p><textarea id="exportTa" readonly style="width:100%;height:180px;margin-top:10px;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--surface-2);color:var(--ink)">${esc(tsv)}</textarea><div class="form-foot"><button class="btn" data-action="closeModal">Cerrar</button><button class="btn" data-action="copyExport">Copiar para Excel</button><button class="btn pri" data-action="dlExport">Descargar CSV</button></div>`);
 }
+
+/* ============ FUNNEL EN FORMATO GERENCIA (Fase 1, punto 5) ============
+   Las columnas son las de la lista «Funnel de Ventas» de SharePoint, con los nombres que lee el importador antiguo
+   (fxRows) y el orden de sus exportaciones (Generador en la columna K). El título lleva el código y el cliente como
+   en el funnel: «OP-261126-01-CLIENTE (nombre)». Sale lo que la persona ve, según el alcance elegido: el servidor
+   nunca manda lo de otros, así que el archivo de un ejecutivo trae solo su cartera. Las postergadas no van (el
+   funnel no tiene ese estado). */
+const FG_COLS=['Estado','Título','Fecha de Contacto','Tipo de negocio','Monto Seg. Física','Monto Seg. Electrónica','Cargo Habilitación','Cuotas Carg. Habilitación','Mg %','Probabilidad','Generador','Fecha Presentación','Fecha de Adjudicación','Proyección','Motivo No Adj.','Costo del Proyecto','Primera Facturación','Año','Fecha Última Conversación','Tomador de Decisión','Usuario Final','Notas','Código Oportunidad','ID'];
+const FG_FMT={'Fecha de Contacto':'f','Fecha Presentación':'f','Fecha de Adjudicación':'f','Fecha Última Conversación':'f','Monto Seg. Física':'n','Monto Seg. Electrónica':'n','Cargo Habilitación':'n','Proyección':'n','Costo del Proyecto':'n','Probabilidad':'p','Mg %':'p'};
+const fgIncluye=o=>enFunnel(o)&&o.status!=='postergada'&&!PROSP_STAGES.includes(o.stage);
+function fgEstado(o){if(o.status==='ganada')return 'Booking';if(o.status==='perdida')return o.fx&&FX_LOST[o.fx.estado]?o.fx.estado:'No Adjudicado';return stageOf(o.stage)?.name||''}
+// Montos como en el funnel: en One Shot, Física/Electrónica son el monto del proyecto; en los servicios, el mensual, y el
+// monto único va en «Cargo Habilitación». One Shot es la línea SSEE One Shot (electrónica). En Seguridad Integral el CRM no
+// separa la parte física de la electrónica: lo mensual va en Física. Si vino del funnel y no se cambió, se respeta su reparto.
+function fgMontos(o){const c=v=>Math.round(toCLP(v,o.currency)),one=c(o.oneTime),mon=c(o.monthly),fx=o.fx;
+ if(fx&&fx.oneTime===o.oneTime&&fx.monthly===o.monthly&&(o.currency||'CLP')==='CLP')return{F:fx.F||0,E:fx.E||0,Hb:fx.Hb||0};
+ const t=tipoDe(o);if(t==='One Shot')return{F:0,E:one+mon*(Number(o.term)||0),Hb:0};
+ if(t==='Seg. Electrónica')return{F:0,E:mon,Hb:one};
+ return{F:mon,E:0,Hb:one}}
+function fgFila(o){const c=byId(S.companies,o.companyId)||{},fx=o.fx||{},m=fgMontos(o),ks=(o.contactIds||[]).map(id=>byId(S.contacts,id)).filter(Boolean);
+ const kn=r=>{const k=ks.find(k=>k.decisionRole===r);return k?(k.firstName+' '+k.lastName).trim():''};
+ const comp=String(c.tradeName||c.legalName||'').toUpperCase().replace(/[()]/g,'').trim();
+ const pres=fx.pres||((o.history||[]).find(h=>h.to==='seguimiento')||{}).date||(o.stage==='seguimiento'?o.stageEnteredAt:'')||'';
+ return{'Estado':fgEstado(o),'Título':`${o.code}-${comp} (${o.name})`,'Fecha de Contacto':o.createdAt||'','Tipo de negocio':tipoDe(o),'Monto Seg. Física':m.F,'Monto Seg. Electrónica':m.E,'Cargo Habilitación':m.Hb,
+  'Cuotas Carg. Habilitación':fx.cuotas||'','Mg %':fx.mg===''||fx.mg==null?'':Number(fx.mg)/100,'Probabilidad':(Number(o.prob)||0)/100,'Generador':uname(o.ownerId),'Fecha Presentación':pres,
+  'Fecha de Adjudicación':o.status==='ganada'?(o.wonAt||''):'','Proyección':Math.round(tcv(o)),'Motivo No Adj.':o.status==='perdida'?(o.lossReason||''):'','Costo del Proyecto':fx.cost||'',
+  'Primera Facturación':fx.fact||'','Año':fx.ano||'','Fecha Última Conversación':lastActOpp(o)||'','Tomador de Decisión':kn('Decisor')||fx.td||'','Usuario Final':kn('Usuario')||fx.uf||'',
+  'Notas':fx.notes||'','Código Oportunidad':o.code||'','ID':fx.id||''}}
+const fgFilas=()=>mine(S.opps).filter(fgIncluye).sort((a,b)=>String(a.code||'').localeCompare(String(b.code||''))).map(fgFila);
+// .xlsx sin librerías: zip sin compresión con las partes mínimas de un libro de Excel
+const CRC_T=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
+function crc32(b){let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=CRC_T[(c^b[i])&255]^(c>>>8);return(c^0xFFFFFFFF)>>>0}
+function zipStore(files){
+ const enc=new TextEncoder(),parts=[],cen=[];let off=0;const u16=v=>[v&255,(v>>>8)&255],u32=v=>[v&255,(v>>>8)&255,(v>>>16)&255,(v>>>24)&255];
+ for(const f of files){const nm=enc.encode(f.name),d=enc.encode(f.data),crc=crc32(d);
+  const h=new Uint8Array([...u32(0x04034b50),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(d.length),...u32(d.length),...u16(nm.length),...u16(0)]);
+  parts.push(h,nm,d);
+  cen.push(new Uint8Array([...u32(0x02014b50),...u16(20),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(d.length),...u32(d.length),...u16(nm.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(off)]),nm);
+  off+=h.length+nm.length+d.length}
+ const cl=cen.reduce((t,x)=>t+x.length,0);
+ const all=[...parts,...cen,new Uint8Array([...u32(0x06054b50),...u16(0),...u16(0),...u16(files.length),...u16(files.length),...u32(cl),...u32(off),...u16(0)])];
+ const out=new Uint8Array(all.reduce((t,x)=>t+x.length,0));let p=0;for(const x of all){out.set(x,p);p+=x.length}return out}
+const xmlEsc=s=>String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const xlsCol=i=>{let s='';i++;while(i){const m=(i-1)%26;s=String.fromCharCode(65+m)+s;i=Math.floor((i-1)/26)}return s};
+const xlsSerial=d=>{const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(d||'');return m?Math.round((Date.UTC(+m[1],+m[2]-1,+m[3])-Date.UTC(1899,11,30))/86400000):null};
+function fgXlsx(rows,hoja){
+ hoja=hoja||'Funnel de Ventas';const NS='http://schemas.openxmlformats.org/spreadsheetml/2006/main',X='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+ const cell=(ref,v,f)=>{if(v===''||v==null)return '';if(f==='f'){const n=xlsSerial(v);return n==null?'':`<c r="${ref}" s="1"><v>${n}</v></c>`}
+  if((f==='n'||f==='p')&&typeof v==='number')return `<c r="${ref}" s="${f==='n'?3:2}"><v>${v}</v></c>`;
+  return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`};
+ const head=`<row r="1">${FG_COLS.map((h,i)=>`<c r="${xlsCol(i)}1" t="inlineStr" s="4"><is><t>${xmlEsc(h)}</t></is></c>`).join('')}</row>`;
+ const body=rows.map((r,j)=>`<row r="${j+2}">${FG_COLS.map((h,i)=>cell(xlsCol(i)+(j+2),r[h],FG_FMT[h])).join('')}</row>`).join('');
+ const rango=`A1:${xlsCol(FG_COLS.length-1)}${rows.length+1}`;
+ const sheet=`${X}<worksheet xmlns="${NS}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols><col min="1" max="1" width="14" customWidth="1"/><col min="2" max="2" width="60" customWidth="1"/><col min="3" max="${FG_COLS.length}" width="18" customWidth="1"/></cols><sheetData>${head}${body}</sheetData><autoFilter ref="${rango}"/></worksheet>`;
+ const abs=rango.replace(/([A-Z]+)(\d+)/g,'$$$1$$$2');
+ return zipStore([
+  {name:'[Content_Types].xml',data:`${X}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`},
+  {name:'_rels/.rels',data:`${X}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`},
+  {name:'xl/workbook.xml',data:`${X}<workbook xmlns="${NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEsc(hoja)}" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'${xmlEsc(hoja)}'!${abs}</definedName></definedNames></workbook>`},
+  {name:'xl/_rels/workbook.xml.rels',data:`${X}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`},
+  {name:'xl/styles.xml',data:`${X}<styleSheet xmlns="${NS}"><numFmts count="1"><numFmt numFmtId="164" formatCode="dd/mm/yyyy"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`},
+  {name:'xl/worksheets/sheet1.xml',data:sheet}])}
+let LAST_FG=null;
+function exportFunnel(){
+ const rows=fgFilas();if(!rows.length)return toast('No hay oportunidades del funnel para exportar en este alcance.');
+ const post=mine(S.opps).filter(o=>enFunnel(o)&&o.status==='postergada').length;
+ const integ=rows.filter(r=>r['Tipo de negocio']==='Seg. Integral').length;
+ const txt=(h,v)=>v===''||v==null?'':FG_FMT[h]==='f'?(xlsSerial(v)!=null?v.slice(8,10)+'-'+v.slice(5,7)+'-'+v.slice(0,4):''):FG_FMT[h]==='p'&&typeof v==='number'?Math.round(v*1000)/10+'%':String(v).replace(/[\t\n]/g,' ');
+ const tsv=[FG_COLS.join('\t'),...rows.map(r=>FG_COLS.map(h=>txt(h,r[h])).join('\t'))].join('\n');
+ const al=alcanceLabel(),slug=fxNorm(al).replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+ LAST_FG={name:`funnel-gerencia-${slug||'cartera'}-${todayIso}.xlsx`,rows};
+ audit('Exportación','Funnel formato Gerencia','',rows.length+' oportunidades · '+al);save();
+ openModal(`<h1 style="font-size:20px">Exportar funnel (formato Gerencia)</h1><p class="sub sm">${rows.length} oportunidades de ${esc(al)}, con las columnas de la lista «Funnel de Ventas»: estado, título con código OP y cliente, tipo de negocio, montos en CLP, probabilidad, generador y fechas.${post?` ${post} postergada${post>1?'s':''} no va${post>1?'n':''}: el funnel no tiene ese estado.`:''}${integ?` En ${integ} de Seguridad Integral el monto mensual va completo en «Monto Seg. Física» (el CRM no separa la parte electrónica).`:''}</p><textarea id="exportTa" readonly style="width:100%;height:180px;margin-top:10px;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--surface-2);color:var(--ink)">${esc(tsv)}</textarea><div class="form-foot"><button class="btn" data-action="closeModal">Cerrar</button><button class="btn" data-action="copyExport">Copiar para Excel</button><button class="btn pri" data-action="dlFunnel">Descargar Excel</button></div>`)}
+async function dlFunnel(){if(!LAST_FG)return;const r=await fileSave(LAST_FG.name,fgXlsx(LAST_FG.rows));
+ if(r==='ok')toast('Excel descargado.');else if(r==='declined')toast('Descarga cancelada.');else if(r==='busy')toast('Ya hay una descarga esperando tu confirmación.');else toast('La descarga no está disponible en esta vista. Usa «Copiar para Excel».')}
 
 /* ============ ENVÍO DE FORMULARIOS ============ */
 const setErr=(f,m)=>{const e=f.querySelector('[data-err]');if(e)e.textContent=m;else toast(esc(m))};
@@ -2886,7 +3012,7 @@ function fxDate(v){if(v===''||v==null)return '';
  const s=String(v).trim();let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);if(m)return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
  m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);if(m){const y=m[3].length===2?'20'+m[3]:m[3];return `${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`}return ''}
 function fxProb(v,dec){const n=fxNum(v),p=typeof v==='string'&&v.includes('%')?n:n<=1?n*100:n,f=dec?10:1;return Math.round(p*f)/f}
-function fxTitle(t){t=String(t||'').trim();let code='',rest=t;const m=t.match(/^(CM-\d{6}-\d{2})-?\s*(.*)$/);if(m){code=m[1];rest=m[2]}
+function fxTitle(t){t=String(t||'').trim();let code='',rest=t;const m=t.match(/^((?:CM|OP)-\d{6}-\d{2})-?\s*(.*)$/);if(m){code=m[1];rest=m[2]}
  let comp,desc;const m2=rest.match(/^(.*?)\s*-?\s*\((.*)\)\s*(?:-\s*([A-Za-z0-9]{1,4}))?\s*$/);
  if(m2){comp=m2[1];desc=m2[2]+(m2[3]?' - '+m2[3]:'')}else{const m3=rest.match(/^(ENEL)[\s-]+(.*?)(-O(-COSTOS)?)?$/);if(m3){comp=m3[1];desc=m3[2]}else{comp=rest;desc=rest}}
  comp=comp.replace(/[\s-]+$/,'').trim().toUpperCase();return{code,comp:FX_ALIAS[comp]||comp,desc:desc.trim()}}
@@ -3094,7 +3220,7 @@ let META_PEND=null;
 async function metaImportFile(file){
  try{const rows=await fxReadXlsx(await file.arrayBuffer(),/meta/i);const m=parseMetaPresupuesto(rows);m.fuente=file.name;metaPreview(m)}
  catch(e){toast('No se pudo leer la meta: '+esc(e.message))}}
-function metaPreview(m){META_PEND=m;const tot=sum(Object.values(m.venta),a=>sum(a));const ya=metaAnual(m.yr);
+function metaPreview(m){META_PEND=m;const tot=sum(Object.values(m.venta),a=>sum(a));const ya=metaPres(m.yr);
  openModal(`<h1 style="font-size:20px">Meta de facturación ${esc(m.yr)}</h1><p class="sub sm">Desde ${esc(m.fuente||'el Excel')}. Revisa antes de usarla.${ya?` <strong>Reemplaza la meta ${esc(m.yr)} cargada (${mm(metaYear(m.yr))}).</strong>`:''}</p>
  <div class="tbl-wrap" style="margin-top:10px;overflow:auto"><table class="tbl"><thead><tr><th>Línea</th>${MESES.map(x=>`<th class="num">${x}</th>`).join('')}<th class="num">Total</th></tr></thead><tbody>
  ${META_LINEAS.filter(([k])=>m.venta[k]).map(([k])=>`<tr><td>${esc(k)}</td>${m.venta[k].map(v=>`<td class="num">${v?mm(v):'—'}</td>`).join('')}<td class="num"><strong>${mm(sum(m.venta[k]))}</strong></td></tr>`).join('')}

@@ -29,8 +29,20 @@ La cartera: 15 empresas (energía solar y eólica, transmisión, minería, hidr�
 
 **Primer ingreso (Isidora Vega).** Su cuenta aún no se ha usado: al entrar con la clave temporal se le pide una clave propia y activar el segundo factor.
 
+## Selector de alcance y metas por equipo
+
+El gerente, el administrador y los subgerentes tienen un selector de alcance en Oportunidades (Kanban y tabla), Prospectos, Actividades y Reportes. El gerente elige entre toda la gerencia, una subgerencia o una persona; el subgerente, entre su subgerencia completa, su cartera propia o uno de sus ejecutivos. El ejecutivo no tiene selector: ve lo suyo. El selector solo achica lo que el rol ya ve; lo de otros equipos no llega al navegador.
+
+En Reportes → Oportunidades, la tabla «Metas por persona y equipo» muestra la meta mensual de cada persona, lo logrado en el mes y en el año, y los totales: la subgerencia suma a su subgerente y sus 4 ejecutivos, y la gerencia suma las dos subgerencias. En la demo la meta de la subgerencia Norte es de $192 MM al mes, la del Sur de $178 MM y la de la gerencia de $370 MM.
+
+Para mostrarlo: entra como Marcela Ibarra, abre Reportes, cambia el selector a «Subgerencia Sur» y después a «Paula Cifuentes». Luego entra como Rodrigo Valdés: el selector solo ofrece el Norte.
+
+## Exportar el funnel en el formato de Gerencia
+
+En Oportunidades (y en Reportes) el botón «Exportar funnel (formato Gerencia)» descarga un Excel con las columnas de la lista «Funnel de Ventas»: Estado, Título (`OP-AAMMDD-NN-CLIENTE (nombre)`), Fecha de Contacto, Tipo de negocio, montos de Seguridad Física y Electrónica, Cargo Habilitación, Probabilidad, Generador (columna K), fechas de presentación y adjudicación, Proyección, Motivo No Adj., decisor y usuario final, entre otras. Los montos van en CLP. Sale lo que la persona ve con el alcance elegido: Paula exporta sus 3 oportunidades, Rodrigo las 12 del Norte y Marcela las 21. Las postergadas y las que siguen en prospección no van, porque el funnel no tiene esos estados.
+
+En Seguridad Integral el CRM no separa la parte física de la electrónica: el monto mensual completo va en «Monto Seg. Física».
+
 ## Lo que la demo todavía no muestra
 
-- **Exportar el funnel al formato del Excel de Gerencia** (Fase 1, punto 5).
-- **Metas por persona sumadas a la subgerencia y a la gerencia, con selector de alcance** (punto 6). Hoy cada persona tiene su meta y cada rol ve las que le corresponden, pero no hay totales por subgerencia ni un selector para cambiar de vista.
 - **Joan por usuario** (fase posterior).
