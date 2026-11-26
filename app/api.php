@@ -157,7 +157,8 @@ function resumenAgente($actual, $ajustes) {
             'servicios' => isset($o->services) ? $o->services : [],
             'contactos' => array_values(array_filter(array_map(function ($id) use ($contactos) { if (!isset($contactos[$id])) return null; $k = $contactos[$id];
                 return trim($k->firstName . ' ' . $k->lastName) . ($k->position ? ', ' . $k->position : '') . ' (' . $k->decisionRole . ')' . mailDe($k); }, isset($o->contactIds) ? $o->contactIds : []))),
-            'ultimas_notas' => array_map(function ($a) use ($corta) { return ['fecha' => $a->date, 'tipo' => $a->type, 'detalle' => $corta($a->desc), 'resultado' => $corta($a->result)]; }, array_slice($lista, 0, 3)),
+            'ultimas_notas' => array_map(function ($a) use ($corta) { return ['id' => isset($a->id) ? $a->id : null, 'fecha' => $a->date, 'tipo' => $a->type, 'detalle' => $corta($a->desc), 'resultado' => $corta($a->result),
+                'proxima_accion' => isset($a->nextAction) ? $a->nextAction : '', 'fecha_proxima_accion' => isset($a->nextActionDate) ? $a->nextActionDate : '']; }, array_slice($lista, 0, 3)),
         ];
     }
     usort($abiertas, function ($x, $y) { return $y['valor_total'] <=> $x['valor_total']; });
@@ -201,7 +202,8 @@ function resumenAgente($actual, $ajustes) {
             'operacion' => operacionDe(isset($empObjL[$l->companyId]) ? $empObjL[$l->companyId] : null, isset($l->siteId) ? $l->siteId : ''),
             'proxima_accion' => isset($l->nextAction) ? $l->nextAction : '', 'fecha_proxima_accion' => isset($l->nextActionDate) ? $l->nextActionDate : '',
             'dias_sin_actividad' => $sa, 'alertas' => $alertas,
-            'ultimas_notas' => array_map(function ($a) use ($corta) { return ['fecha' => $a->date, 'tipo' => $a->type, 'detalle' => $corta($a->desc, 160)]; }, array_slice($lista, 0, 2))];
+            'ultimas_notas' => array_map(function ($a) use ($corta) { return ['id' => isset($a->id) ? $a->id : null, 'fecha' => $a->date, 'tipo' => $a->type, 'detalle' => $corta($a->desc, 160), 'resultado' => $corta(isset($a->result) ? $a->result : '', 160),
+                'proxima_accion' => isset($a->nextAction) ? $a->nextAction : '', 'fecha_proxima_accion' => isset($a->nextActionDate) ? $a->nextActionDate : '']; }, array_slice($lista, 0, 2))];
     }
     // Empresas de planes activos que esperan un contacto efectivo para pasar a prospecto
     $empObj = []; foreach ((array) $d->companies as $c) $empObj[$c->id] = $c;
@@ -287,6 +289,11 @@ function etapaId($v, $ETAPAS) {
                       oportunidades solo se gestionan tareas; el estatus viene del Excel)
    - tarea:           titulo, vence (AAAA-MM-DD), [prioridad Alta|Media|Baja], [oportunidad | prospecto]
    - completar_tarea: tarea (id de la tarea, viene en el resumen)
+   - actualizar_actividad: actividad (id, viene en «ultimas_notas» del resumen) y cualquiera de: resultado,
+                      proxima_accion + fecha_proxima_accion. Para cuando el cliente demora la respuesta: actualiza la
+                      actividad existente (guarda lo anterior en su historial) y corre su tarea de seguimiento, que
+                      conserva su responsable; en un prospecto también actualiza su próxima acción. No cambia tipo,
+                      fecha ni descripción. Mismos permisos que la pantalla (ver permEditaActividad en permisos.php).
    Altas (solo crea; no edita empresas ni contactos existentes):
    - empresa:         nombre, [industria], [ciudad], [region], [sitio_web], [potencial Alto|Medio|Bajo], [notas]
    - contacto:        empresa (existente), nombre, [cargo], [email], [telefono], [linkedin], [operacion], [rol], [notas]
@@ -472,17 +479,61 @@ function aplicarAgente($d, $ops) {
             $pa = $txt($campo($op, 'proxima_accion'), 300); $pf = (string) $campo($op, 'fecha_proxima_accion');
             if ($pa !== '' && $tipoEnt === 'company') throw new Exception("Cambio $n: la próxima acción va en una oportunidad o un prospecto, no en la empresa.");
             if ($pa !== '' && !$fecha($pf)) throw new Exception("Cambio $n: la próxima acción necesita fecha_proxima_accion (AAAA-MM-DD).");
-            array_unshift($d->activities, (object) ['id' => $uid('a'), 'date' => $f, 'userId' => $user, 'type' => $tipo, 'entityType' => $tipoEnt, 'entityId' => $ent->id,
-                'companyId' => $cid, 'desc' => 'Joan: ' . $desc, 'result' => $txt($campo($op, 'resultado')), 'nextAction' => $pa, 'nextActionDate' => $pa !== '' ? $pf : '']);
+            $nuevaAct = (object) ['id' => $uid('a'), 'date' => $f, 'userId' => $user, 'type' => $tipo, 'entityType' => $tipoEnt, 'entityId' => $ent->id,
+                'companyId' => $cid, 'desc' => 'Joan: ' . $desc, 'result' => $txt($campo($op, 'resultado')), 'nextAction' => $pa, 'nextActionDate' => $pa !== '' ? $pf : ''];
+            array_unshift($d->activities, $nuevaAct);
             $audit($ref, 'Actividad', '', $tipo . ': ' . mb_substr($desc, 0, 80));
             if ($pa !== '' && $tipoEnt === 'opp') {
-                $d->tasks[] = (object) ['id' => $uid('t'), 'title' => $pa, 'assigneeId' => $user, 'priority' => 'Media', 'due' => $pf, 'status' => 'Pendiente', 'createdAt' => $hoy, 'by' => 'Joan', 'entityType' => 'opp', 'entityId' => $ent->id];
+                $nuevaAct->taskId = $uid('t');
+                $d->tasks[] = (object) ['id' => $nuevaAct->taskId, 'title' => $pa, 'assigneeId' => $user, 'priority' => 'Media', 'due' => $pf, 'status' => 'Pendiente', 'createdAt' => $hoy, 'by' => 'Joan', 'entityType' => 'opp', 'entityId' => $ent->id];
                 $audit($ref, 'Tarea', '', "$pa ($pf)");
             } elseif ($pa !== '') {
                 $audit($ref, 'Próxima acción', $ent->nextAction . ($ent->nextActionDate ? ' (' . $ent->nextActionDate . ')' : ''), "$pa ($pf)");
                 $ent->nextAction = $pa; $ent->nextActionDate = $pf;
             }
             $res[] = "Actividad registrada en $ref" . ($pa !== '' && $tipoEnt === 'opp' ? " y tarea «{$pa}» ({$pf})" : '');
+            break;
+        // Actualizar una actividad existente (26-11-2026, traído del CRM Comercial): el cliente demora la respuesta.
+        // Trabaja sobre la vista de la cuenta del agente y después pasa por permAplicar: si la actividad o su tarea no
+        // se pueden cambiar con esos permisos, la llamada completa se rechaza (403) y no se guarda nada.
+        case 'actualizar_actividad':
+            $aid = trim((string) $campo($op, 'actividad'));
+            $act = null; foreach ((array) $d->activities as $x) if (isset($x->id) && $x->id === $aid) { $act = $x; break; }
+            if (!$act) throw new Exception("Cambio $n: no encontré la actividad «{$aid}» (usa el id que viene en ultimas_notas).");
+            if (!empty($act->sys) || ($act->type === 'Nota' && preg_match('/^(Funnel: |Actualización del funnel)/u', (string) $act->desc))) throw new Exception("Cambio $n: esa es una nota automática; no se actualiza.");
+            $hayRes = isset($op->resultado); $pa = $txt($campo($op, 'proxima_accion'), 300); $pf = (string) $campo($op, 'fecha_proxima_accion');
+            if (!$hayRes && $pa === '' && $pf === '') throw new Exception("Cambio $n: indica resultado o proxima_accion con fecha_proxima_accion.");
+            if ($pf !== '' && !$fecha($pf)) throw new Exception("Cambio $n: fecha_proxima_accion inválida (usa AAAA-MM-DD).");
+            if ($pf !== '' && $pa === '') $pa = isset($act->nextAction) ? (string) $act->nextAction : '';
+            if ($pa !== '' && $pf === '') throw new Exception("Cambio $n: la próxima acción necesita fecha_proxima_accion (AAAA-MM-DD).");
+            if ($pa !== '' && $act->entityType === 'company') throw new Exception("Cambio $n: la próxima acción va en una oportunidad o un prospecto, no en la empresa.");
+            $ant = ['result' => isset($act->result) ? (string) $act->result : '', 'nextAction' => isset($act->nextAction) ? (string) $act->nextAction : '', 'nextActionDate' => isset($act->nextActionDate) ? (string) $act->nextActionDate : ''];
+            $refA = 'Actividad ' . $act->type . ' ' . $act->date; $reg = null;
+            if ($act->entityType === 'opp') { foreach ((array) $d->opps as $o) if ($o->id === $act->entityId) { $reg = $o; $refA .= ' (' . $o->code . ')'; } }
+            elseif ($act->entityType === 'lead') { foreach ((array) $d->leads as $l) if ($l->id === $act->entityId) { $reg = $l; $refA .= ' (' . (!empty($l->code) ? $l->code : $l->id) . ')'; } }
+            if (!isset($act->hist) || !is_array($act->hist)) $act->hist = [];
+            $act->hist[] = (object) ['at' => $hoy, 'type' => $act->type, 'date' => $act->date, 'desc' => isset($act->desc) ? $act->desc : '',
+                'result' => $ant['result'], 'nextAction' => $ant['nextAction'], 'nextActionDate' => $ant['nextActionDate'], 'by' => $user, 'via' => 'Joan'];
+            $hecho = [];
+            if ($hayRes) { $r = $txt($op->resultado); if ($r !== $ant['result']) { $audit($refA, 'Resultado', $ant['result'], $r); $act->result = $r; $hecho[] = 'resultado'; } }
+            if ($pa !== '' && ($pa !== $ant['nextAction'] || $pf !== $ant['nextActionDate'])) {
+                $audit($refA, 'Próxima acción', trim($ant['nextAction'] . ' ' . $ant['nextActionDate']), "$pa $pf");
+                $act->nextAction = $pa; $act->nextActionDate = $pf;
+                // Tarea de seguimiento: la de la actividad o una abierta con el mismo título en el mismo registro (conserva su responsable)
+                $tk = null;
+                foreach ((array) $d->tasks as $t) if (in_array($t->status, ['Pendiente', 'En curso'], true) && $t->entityType === $act->entityType && $t->entityId === $act->entityId
+                    && ((!empty($act->taskId) && $t->id === $act->taskId) || ($ant['nextAction'] !== '' && $t->title === $ant['nextAction']))) { $tk = $t; if (!empty($act->taskId) && $t->id === $act->taskId) break; }
+                if ($tk) { $tk->title = $pa; $tk->due = $pf; $act->taskId = $tk->id; $hecho[] = "tarea movida al $pf"; }
+                elseif ($act->entityType === 'opp') {
+                    $act->taskId = $uid('t');
+                    $resp = $reg && !empty($reg->ownerId) ? (string) $reg->ownerId : $user;   // la tarea nueva va al dueño de la oportunidad
+                    $d->tasks[] = (object) ['id' => $act->taskId, 'title' => $pa, 'assigneeId' => $resp, 'priority' => 'Media', 'due' => $pf, 'status' => 'Pendiente', 'createdAt' => $hoy, 'by' => 'Joan', 'entityType' => 'opp', 'entityId' => $act->entityId];
+                    $hecho[] = "tarea creada ($pf)";
+                }
+                if ($act->entityType === 'lead' && $reg) { $reg->nextAction = $pa; $reg->nextActionDate = $pf; $hecho[] = 'próxima acción del prospecto'; }
+            }
+            if (!$hecho) { array_pop($act->hist); $res[] = "Sin cambios en $refA"; break; }
+            $res[] = "$refA actualizada: " . implode(', ', $hecho);
             break;
         case 'proxima_accion':
             $dst = $destino($op, $n);

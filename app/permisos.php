@@ -7,7 +7,9 @@
    - Prospectos, planes, oportunidades, ofertas, tareas y actividades: por dueño
      (ownerId; en actividades userId, en tareas assigneeId). Facturas y actas van con
      el dueño de su oportunidad. Una actividad o tarea de otra persona sobre una
-     oportunidad, prospecto u oferta que sí ves también se ve (no se puede editar).
+     oportunidad, prospecto u oferta que sí ves también se ve. La tarea no se puede
+     editar; la actividad sí la actualiza quien tiene al dueño del registro en su alcance
+     (sin cambiar su autor ni su registro: ver permEditaActividad).
    - Alcance: ejecutivo = lo suyo; subgerente = lo suyo y lo de su equipo;
      gerente y administrador = todo.
    - Metas (config.targets): solo las de las personas del alcance. La meta del Excel
@@ -160,6 +162,15 @@ function permEditaCompartido($ctx, $tabla, $antes, $x) {
     return json_encode($a) === json_encode($b);
 }
 function permBorraCompartido($ctx, $x) { return $ctx->admin; }
+// Actividad que registró otra persona sobre un registro del alcance (oportunidad, prospecto u oferta): el dueño del
+// registro, su subgerente y el gerente pueden actualizarla (resultado, próxima acción, descripción…), pero no cambiar
+// quién la registró ni moverla a otro registro. Las de una empresa quedan solo para el autor y su alcance.
+function permEditaActividad($ctx, $tabla, $antes, $x, $idx) {
+    if ($tabla !== 'activities') return false;
+    foreach (['userId', 'entityType', 'entityId', 'companyId'] as $c) if (permTxt($x, $c) !== permTxt($antes, $c)) return false;
+    $v = permVinculo($antes, $idx);
+    return $v && permEnAlcance($ctx, permDueno($v[0], $v[1], $idx));
+}
 
 /* Aplica sobre $full (datos completos) la copia $nuevo que envió la pantalla de esta persona.
    Devuelve los datos completos resultantes. Lo no permitido queda fuera y se anota en $ctx->avisos
@@ -231,7 +242,7 @@ function permFusionarLista($tabla, $full, $previo, $nuevo, $ctx, $idx) {
             $x->updatedBy = $ctx->id; $x->updatedAt = date('c');
         } else {
             $da = permDueno($tabla, $antes, $idx); $dn = permDueno($tabla, $x, $idx);
-            if (!permEnAlcance($ctx, $da)) { permNo($ctx, 'cambiar', $tabla, $antes); continue; }
+            if (!permEnAlcance($ctx, $da) && !permEditaActividad($ctx, $tabla, $antes, $x, $idx)) { permNo($ctx, 'cambiar', $tabla, $antes); continue; }
             if ($dn !== $da && !permAsignable($ctx, $dn)) { permNo($ctx, $tabla === 'tasks' ? 'asignar a esa persona' : 'traspasar a esa persona', $tabla, $antes); continue; }
         }
         $reemplazo[$id] = $x;
