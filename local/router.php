@@ -6,7 +6,7 @@ header('X-Robots-Tag: noindex, nofollow');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
 header('X-Frame-Options: SAMEORIGIN');
-if (preg_match('#(^|/)(config\.php|almacen\.php|almacen\.log|\.lock|\.lock-db|\.htaccess|[^/]*\.json\.php|[^/]*\.tmp|[^/]*\.db[^/]*)$#', $ruta) || preg_match('#^/datos(/|$)#', $ruta) || strpos($ruta, '..') !== false) {
+if (preg_match('#(^|/)(config\.php|almacen\.php|cuentas\.php|permisos\.php|almacen\.log|\.lock|\.lock-db|\.htaccess|[^/]*\.json\.php|[^/]*\.tmp|[^/]*\.db[^/]*)$#', $ruta) || preg_match('#^/datos(/|$)#', $ruta) || strpos($ruta, '..') !== false) {
     http_response_code(403);
     exit('Prohibido');
 }

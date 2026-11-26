@@ -1,0 +1,40 @@
+CRM FS - INSTALACIÓN EN EL SERVIDOR
+===================================
+
+Requisitos: Linux con PHP 8 (php-fpm o Apache con mod_php), extensión SQLite
+(paquete php-sqlite3) y HTTPS. La carpeta pública del sitio es app/.
+
+1. SUBIR
+   - Copia el repositorio en el servidor. El sitio apunta a la carpeta app/:
+       index.html, api.php, almacen.php, cuentas.php, permisos.php, config.php,
+       .htaccess, datos/ (con su .htaccess)
+   - La carpeta app/datos debe poder escribirla el usuario de PHP. Ahí quedan
+     crm.db (datos), cuentas.db (cuentas y sesiones), la copia JSON y los
+     respaldos. Nada de esa carpeta se sirve al navegador.
+   - Con nginx, bloquea lo mismo que bloquea .htaccess: datos/, config.php,
+     almacen.php, cuentas.php, permisos.php y los archivos .db, .json.php, .log.
+
+2. PRIMERA CUENTA (administrador)
+   - Desde la carpeta del repositorio:
+       php herramientas/cuentas.php crear-admin <usuario> "<Nombre Apellido>"
+   - Muestra una clave temporal. Al entrar al CRM con ella se pide elegir una
+     clave propia y activar el segundo factor (aplicación de autenticación).
+
+3. INICIAR LOS DATOS Y CREAR LAS CUENTAS
+   - El administrador entra y, en Configuración, usa «Empezar con mis datos» o
+     «Restaurar respaldo».
+   - En Configuración > Usuarios y equipos crea las cuentas: nombre, usuario,
+     rol (gerente, subgerente, ejecutivo o administrador) y equipo (subgerencia).
+     Cada cuenta nueva recibe una clave temporal que se entrega a la persona.
+
+4. MANTENCIÓN
+   - php herramientas/cuentas.php listar | clave <usuario> | segundo-factor <usuario>
+   - Respaldos: la base hace uno por hora (últimos 3 días) y uno por día (último
+     mes) en datos/historial. Copia además app/datos fuera del servidor.
+
+NOTAS
+   - La sesión dura 12 horas y se cierra tras 4 horas sin uso (config.php).
+   - Cinco fallos seguidos de clave o código bloquean la cuenta 15 minutos.
+   - Si dos personas guardan al mismo tiempo, la segunda recibe la versión más
+     reciente y repite su último cambio (el guardado registro por registro de
+     la Fase 1 lo resuelve).

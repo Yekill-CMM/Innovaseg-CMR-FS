@@ -49,8 +49,11 @@ function almAbrir($dir, $archivoJson, $cabecera) {
         $pdo->exec('CREATE INDEX IF NOT EXISTS registros_vivos ON registros (tabla, eliminado_en, orden)');
         $pdo->exec('CREATE TABLE IF NOT EXISTS cambios (
             n INTEGER PRIMARY KEY AUTOINCREMENT, rev INTEGER NOT NULL, en TEXT NOT NULL, origen TEXT NOT NULL,
-            tabla TEXT NOT NULL, registro TEXT NOT NULL, accion TEXT NOT NULL, antes TEXT, despues TEXT)');
+            tabla TEXT NOT NULL, registro TEXT NOT NULL, accion TEXT NOT NULL, antes TEXT, despues TEXT, usuario TEXT)');
         $pdo->exec('CREATE INDEX IF NOT EXISTS cambios_registro ON cambios (tabla, registro, n)');
+        // Bases anteriores al multiusuario: se agrega la columna con la persona que hizo el cambio
+        $cols = array_column($pdo->query('PRAGMA table_info(cambios)')->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('usuario', $cols, true)) $pdo->exec('ALTER TABLE cambios ADD COLUMN usuario TEXT');
         if ($nueva || almMeta($pdo, 'esquema') === null) {
             // Solo un proceso crea y migra (si la pantalla y Joan consultan al mismo tiempo, el otro espera)
             $lk = fopen($dir . '/.lock-db', 'c'); if ($lk) flock($lk, LOCK_EX);
@@ -106,10 +109,12 @@ function almLeer($pdo) {
 }
 
 // Guarda el documento completo calculando diferencias. Devuelve la nueva rev. Debe llamarse dentro de una transacción.
-function almGuardar($pdo, $data, $rev, $savedAt, $origen) {
+// $usuario: id de la persona que guarda (queda en cada fila de «cambios»)
+function almGuardar($pdo, $data, $rev, $savedAt, $origen, $usuario = null) {
     $ahora = date('c');
     $claves = []; $vacias = [];
-    $insC = $pdo->prepare('INSERT INTO cambios (rev, en, origen, tabla, registro, accion, antes, despues) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    $insC0 = $pdo->prepare('INSERT INTO cambios (rev, en, origen, tabla, registro, accion, antes, despues, usuario) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $insC = new class($insC0, $usuario) { private $st; private $u; function __construct($st, $u) { $this->st = $st; $this->u = $u; } function execute($v) { $v[] = $this->u; return $this->st->execute($v); } };
     foreach (get_object_vars($data) as $k => $v) {
         $claves[] = $k;
         $ant = $pdo->prepare('SELECT valor FROM doc WHERE clave = ?'); $ant->execute([$k]); $antes = $ant->fetchColumn();
@@ -223,20 +228,23 @@ function almEstado($pdo, $dir) {
 
 // Historial de un registro (o de una tabla), del más reciente al más antiguo
 function almHistorial($pdo, $tabla, $id, $limite = 200) {
-    $st = $pdo->prepare('SELECT n, rev, en, origen, accion, antes, despues FROM cambios WHERE tabla = ? AND registro = ? ORDER BY n DESC LIMIT ' . (int) $limite);
+    $st = $pdo->prepare('SELECT n, rev, en, origen, accion, antes, despues, usuario FROM cambios WHERE tabla = ? AND registro = ? ORDER BY n DESC LIMIT ' . (int) $limite);
     $st->execute([$tabla, $id]);
     $out = [];
-    foreach ($st as $r) $out[] = ['n' => (int) $r['n'], 'rev' => (int) $r['rev'], 'en' => $r['en'], 'origen' => $r['origen'], 'accion' => $r['accion'],
+    foreach ($st as $r) $out[] = ['n' => (int) $r['n'], 'rev' => (int) $r['rev'], 'en' => $r['en'], 'origen' => $r['origen'], 'usuario' => $r['usuario'], 'accion' => $r['accion'],
         'antes' => $r['antes'] !== null ? json_decode($r['antes']) : null, 'despues' => $r['despues'] !== null ? json_decode($r['despues']) : null];
     return $out;
 }
 
 // Registros eliminados recuperables (los más recientes primero). La auditoría de la pantalla guarda solo los últimos 400
 // movimientos; los más antiguos quedan aquí como eliminados, así que no se ofrecen para recuperar.
-function almEliminados($pdo, $limite = 100) {
-    $st = $pdo->query("SELECT tabla, id, datos, eliminado_en FROM registros WHERE eliminado_en IS NOT NULL AND tabla <> 'audit' ORDER BY eliminado_en DESC LIMIT " . (int) $limite);
+// $filtro($tabla, $datos): si se indica, solo los registros para los que devuelve true (permisos de quien consulta)
+function almEliminados($pdo, $limite = 100, $filtro = null) {
+    $st = $pdo->query("SELECT tabla, id, datos, eliminado_en FROM registros WHERE eliminado_en IS NOT NULL AND tabla <> 'audit' ORDER BY eliminado_en DESC");
     $out = [];
     foreach ($st as $r) { $d = json_decode($r['datos']); $nom = '';
+        if ($filtro && !$filtro($r['tabla'], $d)) continue;
+        if (count($out) >= $limite) break;
         foreach (['code', 'name', 'title', 'legalName', 'desc'] as $k) if (!empty($d->$k) && is_string($d->$k)) { $nom .= ($nom ? ' · ' : '') . mb_substr($d->$k, 0, 90); if ($k === 'name' || $k === 'title' || $k === 'legalName' || $k === 'desc') break; }
         if ($nom === '' && !empty($d->firstName)) $nom = trim($d->firstName . ' ' . (isset($d->lastName) ? $d->lastName : '')) . (!empty($d->email) ? ' · ' . $d->email : '');
         $out[] = ['tabla' => $r['tabla'], 'id' => $r['id'], 'nombre' => $nom ?: $r['id'], 'eliminado_en' => $r['eliminado_en']]; }
@@ -244,13 +252,13 @@ function almEliminados($pdo, $limite = 100) {
 }
 
 // Recupera un registro eliminado (vuelve a la colección con sus últimos datos)
-function almRestaurar($pdo, $tabla, $id, $origen) {
+function almRestaurar($pdo, $tabla, $id, $origen, $usuario = null) {
     $st = $pdo->prepare('SELECT datos FROM registros WHERE tabla = ? AND id = ? AND eliminado_en IS NOT NULL'); $st->execute([$tabla, $id]);
     $d = $st->fetchColumn(); if ($d === false) return false;
     $rev = (int) almMeta($pdo, 'rev') + 1; $ahora = date('c');
     $max = (int) $pdo->query('SELECT COALESCE(MAX(orden), -1) FROM registros WHERE tabla = ' . $pdo->quote($tabla))->fetchColumn();
     $pdo->prepare('UPDATE registros SET eliminado_en = NULL, actualizado_en = ?, rev = ?, orden = ? WHERE tabla = ? AND id = ?')->execute([$ahora, $rev, $max + 1, $tabla, $id]);
-    $pdo->prepare('INSERT INTO cambios (rev, en, origen, tabla, registro, accion, antes, despues) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)')->execute([$rev, $ahora, $origen, $tabla, $id, 'restaurado', $d]);
+    $pdo->prepare('INSERT INTO cambios (rev, en, origen, tabla, registro, accion, antes, despues, usuario) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)')->execute([$rev, $ahora, $origen, $tabla, $id, 'restaurado', $d, $usuario]);
     almMetaPut($pdo, 'rev', (string) $rev);
     return $rev;
 }

@@ -17,7 +17,7 @@ Options -Indexes
 DirectoryIndex index.html
 
 # Bloquear acceso directo a archivos internos
-<FilesMatch "^(config\.php|almacen\.php|almacen\.log|\.lock|.*\.json\.php|.*\.tmp|.*\.db.*)$">
+<FilesMatch "^(config\.php|almacen\.php|cuentas\.php|permisos\.php|almacen\.log|\.lock|.*\.json\.php|.*\.tmp|.*\.db.*)$">
   <IfModule mod_authz_core.c>
     Require all denied
   </IfModule>
