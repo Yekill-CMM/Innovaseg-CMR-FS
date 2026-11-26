@@ -29,10 +29,16 @@ nunca llega a su navegador:
 
 | Rol | Ve | Cambia |
 |---|---|---|
-| Ejecutivo | Empresas y contactos (todos); lo suyo en prospectos, planes, oportunidades, ofertas, tareas, actividades, facturas y actas; su meta | Lo suyo. Empresas que creó, tiene a cargo o trabaja; contactos que creó o de esas empresas |
+| Ejecutivo | Empresas y contactos (todos); lo suyo en prospectos, planes, oportunidades, ofertas, tareas, actividades, facturas y actas; su meta | Lo suyo. Crea y edita empresas y contactos (todos) |
 | Subgerente | Además, lo de su equipo y sus metas | Lo de su equipo (puede traspasar y asignar tareas dentro de él); todas las empresas y contactos |
 | Gerente | Todo | Todo lo comercial; la configuración, solo lectura |
 | Administrador | Todo | Todo, más cuentas, configuración, eliminar y fusionar empresas y contactos, restaurar respaldos y traspasar carteras |
+
+En empresas y contactos queda la trazabilidad: el servidor anota quién creó cada uno
+(`createdBy`) y quién lo cambió por última vez (`updatedBy`, `updatedAt`), y la tabla `cambios`
+guarda cada cambio con la persona, el valor anterior y el nuevo. Eliminarlos o fusionarlos es solo
+del administrador. Metas: cada ejecutivo ve la suya, el subgerente las de su equipo y el gerente
+las de todos.
 
 Una actividad o tarea de otra persona sobre un registro que ves (por ejemplo, la gestión de tu
 subgerente en tu oportunidad) también se ve, pero no se cambia. La meta del Excel de presupuesto

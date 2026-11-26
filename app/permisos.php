@@ -18,13 +18,13 @@
    - En lo que tiene dueño: lo de su alcance, y al crear o traspasar, solo hacia
      personas a las que puede asignar (ejecutivo: a sí mismo; subgerente: a su
      equipo; gerente y administrador: a cualquiera).
-   - Empresas: el gerente, los subgerentes y el administrador, todas; un ejecutivo, las
-     que creó, las que tiene a su cargo y las que trabaja (con un prospecto,
-     oportunidad o plan suyo). Contactos: los que creó o los de una empresa que puede
-     editar. El responsable de la empresa (ownerId) solo lo cambia quien puede asignar
-     a la persona nueva y a la anterior.
-   - Eliminar una empresa o un contacto: el administrador, o quien la creó (y siempre
-     que no tenga historial: ver validarBajas). Fusionar: solo el administrador.
+   - Empresas y contactos: cualquier persona los crea y los edita, con trazabilidad: el
+     servidor anota createdBy al crear y updatedBy/updatedAt en cada cambio (la pantalla no
+     puede cambiar esos campos), y «cambios» guarda la persona, el valor anterior y el nuevo.
+     El responsable de la empresa (ownerId) solo lo cambia quien puede asignar a la persona
+     nueva y a la anterior.
+   - Eliminar o fusionar una empresa o un contacto: solo el administrador (y siempre que
+     no tenga historial: ver validarBajas).
    - Configuración, modo y reemplazo completo de los datos: solo el administrador.
    - Auditoría de la pantalla: solo se agregan movimientos, firmados por quien guarda.
 
@@ -144,25 +144,9 @@ const PERM_TABLAS = ['companies' => 'la empresa', 'contacts' => 'el contacto', '
 // Lo que no está permitido no se aplica (el servidor deja su versión) y queda como aviso para la pantalla
 function permNo($ctx, $que, $tabla, $x, $extra = '') { $ctx->avisos[] = "No tienes permiso para $que " . (PERM_TABLAS[$tabla] ?? 'el registro') . ' «' . permNombre($tabla, $x) . "»$extra."; }
 
-// Empresas que trabaja una persona: tiene un prospecto, oportunidad u oferta suyos, o la tiene en un plan suyo
-function permEmpresasTrabaja($full, $ctx) {
-    $s = [];
-    foreach (['leads', 'opps'] as $t) foreach (permLista($full, $t) as $x) if (permTxt($x, 'ownerId') === $ctx->id) $s[permTxt($x, 'companyId')] = 1;
-    foreach (permLista($full, 'plans') as $p) if (permTxt($p, 'ownerId') === $ctx->id) foreach (permLista($p, 'targets') as $t) $s[permTxt($t, 'companyId')] = 1;
-    unset($s['']);
-    return $s;
-}
-function permEditaEmpresa($ctx, $c, $trabaja) {
-    if ($ctx->alc === null || $ctx->sub) return true;
-    return permTxt($c, 'createdBy') === $ctx->id || permTxt($c, 'ownerId') === $ctx->id || isset($trabaja[permTxt($c, 'id')]);
-}
-function permEditaContacto($ctx, $k, $empresas, $trabaja) {
-    if ($ctx->alc === null || $ctx->sub) return true;
-    if (permTxt($k, 'createdBy') === $ctx->id) return true;
-    $c = $empresas[permTxt($k, 'companyId')] ?? null;
-    return $c ? permEditaEmpresa($ctx, $c, $trabaja) : false;
-}
-function permBorraCompartido($ctx, $x) { return $ctx->admin || permTxt($x, 'createdBy') === $ctx->id; }
+// Campos de trazabilidad de empresas y contactos: los pone el servidor
+const PERM_TRAZA = ['createdBy', 'updatedBy', 'updatedAt'];
+function permBorraCompartido($ctx, $x) { return $ctx->admin; }
 
 /* Aplica sobre $full (datos completos) la copia $nuevo que envió la pantalla de esta persona.
    Devuelve los datos completos resultantes. Lo no permitido queda fuera y se anota en $ctx->avisos
@@ -176,12 +160,6 @@ function permAplicar($full, $nuevo, $ctx) {
     $idx = permIndice($full); $idxN = permIndice($nuevo);
     // el dueño de facturas, actas y ofertas sin dueño propio se resuelve con las oportunidades vigentes y las que llegan
     $idxAmbos = ['opps' => $idx['opps'] + $idxN['opps'], 'leads' => $idx['leads'] + $idxN['leads'], 'offers' => $idx['offers'] + $idxN['offers']];
-    $trabaja = null; $empresas = null;
-    $prepEmp = function () use (&$trabaja, &$empresas, $full, $nuevo, $ctx) {
-        if ($trabaja !== null) return;
-        $trabaja = permEmpresasTrabaja($full, $ctx) + permEmpresasTrabaja($nuevo, $ctx);
-        $empresas = []; foreach (permLista($full, 'companies') as $c) $empresas[permTxt($c, 'id')] = $c;
-    };
     $out = new stdClass();
     $claves = array_unique(array_merge(array_keys(get_object_vars($full)), array_keys(get_object_vars($nuevo))));
     foreach ($claves as $k) {
@@ -190,7 +168,7 @@ function permAplicar($full, $nuevo, $ctx) {
         $esCol = isset(PERM_DUENO[$k]) || in_array($k, PERM_COMPARTIDAS, true) || in_array($k, PERM_PUBLICAS, true);
         if ($esCol) {
             if (!$tiene || !is_array($nuevo->$k)) { if ($antes !== null) $out->$k = $antes; continue; }   // no vino: queda igual
-            $out->$k = permFusionarLista($k, is_array($antes) ? $antes : [], permLista($previo, $k), $nuevo->$k, $ctx, $idxAmbos, $prepEmp, $trabaja, $empresas);
+            $out->$k = permFusionarLista($k, is_array($antes) ? $antes : [], permLista($previo, $k), $nuevo->$k, $ctx, $idxAmbos);
             continue;
         }
         // Claves del documento
@@ -210,7 +188,7 @@ function permSeq($a, $b) {
     return $o;
 }
 
-function permFusionarLista($tabla, $full, $previo, $nuevo, $ctx, $idx, $prepEmp, &$trabaja, &$empresas) {
+function permFusionarLista($tabla, $full, $previo, $nuevo, $ctx, $idx) {
     $porId = function ($l) use ($tabla) { $m = []; foreach ($l as $x) { if (!is_object($x) || !isset($x->id) || (string) $x->id === '') throw new PermRechazo("Hay un registro sin id en $tabla."); $m[(string) $x->id] = $x; } return $m; };
     $F = $porId($full); $P = $porId($previo); $N = $porId($nuevo);
     if (count($N) !== count($nuevo)) throw new PermRechazo("Hay registros con el id repetido en $tabla.");
@@ -230,15 +208,13 @@ function permFusionarLista($tabla, $full, $previo, $nuevo, $ctx, $idx, $prepEmp,
         if ($soloAgregar) continue;
         $antes = $F[$id];
         if ($compartida) {
-            $prepEmp();
-            $ok = $tabla === 'companies' ? permEditaEmpresa($ctx, $antes, $trabaja) : permEditaContacto($ctx, $antes, $empresas, $trabaja);
-            if (!$ok) { permNo($ctx, 'cambiar', $tabla, $antes); continue; }
-            if (isset($antes->createdBy)) $x->createdBy = $antes->createdBy; else unset($x->createdBy);
+            foreach (PERM_TRAZA as $c) { if (isset($antes->$c)) $x->$c = $antes->$c; else unset($x->$c); }
             if ($tabla === 'companies' && permTxt($x, 'ownerId') !== permTxt($antes, 'ownerId')
                 && !(permAsignable($ctx, permTxt($x, 'ownerId')) && (permTxt($antes, 'ownerId') === '' || permEnAlcance($ctx, permTxt($antes, 'ownerId'))))) {
                 permNo($ctx, 'cambiar el responsable de', $tabla, $antes); continue;
             }
-            if ($j($x) === $j($antes)) continue;
+            if ($j($x) === $j($antes)) continue;   // solo faltaban los campos de trazabilidad
+            $x->updatedBy = $ctx->id; $x->updatedAt = date('c');
         } else {
             $da = permDueno($tabla, $antes, $idx); $dn = permDueno($tabla, $x, $idx);
             if (!permEnAlcance($ctx, $da)) { permNo($ctx, 'cambiar', $tabla, $antes); continue; }
@@ -254,7 +230,7 @@ function permFusionarLista($tabla, $full, $previo, $nuevo, $ctx, $idx, $prepEmp,
         }
         if ($tabla === 'audit') { $x->userId = $ctx->id; }
         elseif (in_array($tabla, PERM_PUBLICAS, true)) { if (!$ctx->admin) continue; }
-        elseif ($compartida) { $x->createdBy = $ctx->id; }
+        elseif ($compartida) { foreach (PERM_TRAZA as $c) unset($x->$c); $x->createdBy = $ctx->id; }
         elseif (!permAsignable($ctx, permDueno($tabla, $x, $idx)) && !($ctx->alc === null && permDueno($tabla, $x, $idx) === '')) { permNo($ctx, 'crear', $tabla, $x); continue; }
         $altas[$id] = $x;
     }
@@ -283,6 +259,6 @@ function permVeRegistro($ctx, $full, $tabla, $datos) {
 function permRecupera($ctx, $full, $tabla, $datos) {
     if ($ctx->admin) return true;
     if (!is_object($datos) || !isset(PERM_TABLAS[$tabla])) return false;
-    if (in_array($tabla, PERM_COMPARTIDAS, true)) return permTxt($datos, 'createdBy') === $ctx->id;
+    if (in_array($tabla, PERM_COMPARTIDAS, true)) return false;   // empresas y contactos: solo el administrador
     return permEnAlcance($ctx, permDueno($tabla, $datos, permIndice($full)));
 }
