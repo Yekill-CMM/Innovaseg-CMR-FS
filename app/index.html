@@ -1481,7 +1481,52 @@ function alertItem(a){return `<button class="row-item sev-${a.sev}" data-action=
 function panel(title,count,body,extra){return `<section class="panel"><div class="panel-h"><h2>${title}${count!==undefined?` <span class="muted">(${count})</span>`:''}</h2>${extra||''}</div><div class="panel-b">${body}</div></section>`}
 const emptyMsg=m=>`<div class="empty">${m}</div>`;
 function entityLabel(type,id){if(type==='opp'){const o=byId(S.opps,id);return o?o.name:'—'}if(type==='lead'){const l=byId(S.leads,id);return l?leadLabel(l):'—'}if(type==='offer'){const f=byId(S.offers,id);return f?f.code:'—'}if(type==='company')return cname(id);return '—'}
-function timeline(acts){if(!acts.length)return emptyMsg('Sin actividades registradas. Registra la primera gestión.');return `<ul class="tl">${acts.sort((a,b)=>b.date.localeCompare(a.date)).map(a=>`<li class="${a.date>todayIso?'future':''}"><div class="t-h"><span><strong>${esc(a.type)}</strong>${a._ref?' '+a._ref:''}${a.date>todayIso?' (agendada'+(a.time?' a las '+esc(a.time):'')+')':''}${a.date>=todayIso&&MEETING_TYPES.includes(a.type)?` <a class="sm" href="${esc(outlookUrl(a))}" target="_blank" rel="noopener">Outlook</a>`:''}</span><span>${fmtDate(a.date)}, ${esc(uname(a.userId))}</span></div><div class="t-d">${esc(a.desc)}</div>${a.result?`<div class="t-r">Resultado: ${esc(a.result)}</div>`:''}${a.nextAction?`<div class="t-r">Próxima acción: ${esc(a.nextAction)}${a.nextActionDate?' ('+fmtDate(a.nextActionDate)+')':''}</div>`:''}</li>`).join('')}</ul>`}
+function timeline(acts){if(!acts.length)return emptyMsg('Sin actividades registradas. Registra la primera gestión.');return `<ul class="tl">${acts.sort((a,b)=>b.date.localeCompare(a.date)).map(a=>`<li class="${a.date>todayIso?'future':''}"><div class="t-h"><span><strong>${esc(a.type)}</strong>${a._ref?' '+a._ref:''}${a.date>todayIso?' (agendada'+(a.time?' a las '+esc(a.time):'')+')':''}${a.date>=todayIso&&MEETING_TYPES.includes(a.type)?` <a class="sm" href="${esc(outlookUrl(a))}" target="_blank" rel="noopener">Outlook</a>`:''}</span><span>${fmtDate(a.date)}, ${esc(uname(a.userId))}</span></div><div class="t-d">${esc(a.desc)}</div>${a.result?`<div class="t-r">Resultado: ${esc(a.result)}</div>`:''}${a.nextAction?`<div class="t-r">Próxima acción: ${esc(a.nextAction)}${a.nextActionDate?' ('+fmtDate(a.nextActionDate)+')':''}</div>`:''}${actHistLinea(a)}${a.id&&puedeEditarAct(a)?`<div class="t-r"><a href="#" class="sm" data-action="editActResult" data-id="${a.id}">Editar / actualizar</a></div>`:''}</li>`).join('')}</ul>`}
+// Actividades editables (26-11-2026, traído del CRM Comercial): el cliente puede demorar su respuesta, así que la gestión
+// (tipo, fecha, descripción, resultado y próxima acción) se actualiza después. Lo anterior queda en a.hist y en la
+// auditoría, y la tarea de seguimiento se corre con la actividad en vez de duplicarse.
+// Quién edita (el servidor lo vuelve a revisar en permisos.php): el autor, el dueño del registro al que está ligada
+// y quienes tienen a cualquiera de los dos en su alcance (subgerente de su equipo, gerente y administrador).
+function actRegistro(a){if(a.entityType==='opp')return byId(S.opps,a.entityId);if(a.entityType==='lead')return byId(S.leads,a.entityId);if(a.entityType==='offer'){const f=byId(S.offers,a.entityId);return f&&(f.ownerId?f:byId(S.opps,f.oppId))}return null}
+function puedeEditarAct(a){if(!a||isSysAct(a))return false;const e=equipoDe();if(!e)return true;if(e.has(a.userId))return true;const r=actRegistro(a);return !!r&&e.has(ownerOf(r))}
+function actHistLinea(a){const h=a.hist||[];if(!h.length)return '';const u=h[h.length-1];const quien=u.by?(byId(S.users,u.by)?uname(u.by):u.by):'';
+ return `<div class="t-r muted sm">Actualizada ${h.length===1?'una vez':h.length+' veces'}, la última el ${fmtDate(u.at)}${quien?' por '+esc(quien)+(u.via?' ('+esc(u.via)+')':''):''}${u.result?'. Antes: '+esc(u.result):''}</div>`}
+function actSection(acts,ent){const g=acts.filter(a=>!isSysAct(a)),sys=acts.filter(isSysAct);const fut=g.filter(a=>a.date>todayIso).length;
+ return `<div class="section" data-sec="actividades"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><h2 style="margin:0">Actividades (${g.length}${fut?`, ${fut} agendada${fut>1?'s':''}`:''})</h2><button class="btn sm" data-action="quick" data-ent="${ent}">+ Registrar actividad</button></div>
+ <div style="margin-top:8px">${timeline(g)}</div>${sys.length?`<details style="margin-top:8px"><summary class="muted sm" style="cursor:pointer">Notas automáticas (${sys.length})</summary>${timeline(sys)}</details>`:''}</div>`}
+function actTask(a){const t=a.taskId?byId(S.tasks,a.taskId):null;if(t&&isOpenTask(t))return t;return S.tasks.find(t=>isOpenTask(t)&&t.entityType===a.entityType&&t.entityId===a.entityId&&a.nextAction&&t.title===a.nextAction)||null}
+// La tarea se mueve solo si quien edita puede cambiarla; conserva su responsable. Una tarea nueva va al dueño del registro.
+const tareaMovible=t=>{const e=equipoDe();return !e||e.has(t.assigneeId)};
+function actResponsable(a){const r=actRegistro(a);const o=r&&ownerOf(r);return o&&asignables().some(u=>u.id===o)?o:S.currentUser}
+const ACT_RESULTADOS=['Esperando respuesta','Respondió','Sin respuesta, reintentar','Reagendó','Pidió más información','No le interesa por ahora'];
+function modalActResult(id){const a=byId(S.activities,id);if(!a)return;if(!puedeEditarAct(a))return toast('No puedes editar esta actividad: la registró otra persona.');const t=actTask(a);const mov=!t||tareaMovible(t);
+ openModal(`<h1 style="font-size:20px">Editar actividad</h1><p class="sub sm">${esc(entityLabel(a.entityType,a.entityId)||cname(a.companyId))}. Registrada por ${esc(uname(a.userId))}. Si el cliente aún no responde, cambia el resultado y corre la próxima acción.</p>
+ <form data-form="actResult" data-id="${a.id}" style="margin-top:8px"><div class="fgrid">
+  <label class="f">Tipo<select name="type">${opt(ACT_TYPES.includes(a.type)?ACT_TYPES:[a.type,...ACT_TYPES],a.type)}</select></label>
+  <label class="f">Fecha<input type="date" name="date" value="${esc(a.date||todayIso)}" required></label>
+  <label class="f full">Descripción<textarea name="desc" required>${esc(a.desc||'')}</textarea></label>
+  <label class="f full">Resultado<input name="result" value="${esc(a.result||'')}" list="actResList" placeholder="Qué respondió el cliente o en qué quedó"><datalist id="actResList">${ACT_RESULTADOS.map(x=>`<option value="${esc(x)}">`).join('')}</datalist></label>
+  <label class="f">Próxima acción<input name="nextAction" value="${esc(a.nextAction||'')}"></label>
+  <label class="f">Fecha próxima acción<input type="date" name="nextActionDate" value="${esc(a.nextActionDate||'')}"></label>
+  ${a.entityType==='company'?'':mov?`<label class="f full" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="mkTask" checked class="chk"> ${t?`Mover la tarea «${esc(t.title)}» (vence ${fmtDate(t.due)}, de ${esc(uname(t.assigneeId))})`:`Crear tarea con la próxima acción para ${esc(uname(actResponsable(a)))}`}</label>`:`<p class="muted sm full">La tarea «${esc(t.title)}» es de ${esc(uname(t.assigneeId))}: no puedes moverla. Avísale para que la corra.</p>`}
+ </div><p class="err" data-err></p><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Guardar</button></div></form>`)}
+function actualizarResultado(a,d){const auto=[];const t=actTask(a);const ref=(refOf(a.entityType,a.entityId)||{}).code||cname(a.companyId);
+ const nuevo={result:String(d.result||'').trim(),nextAction:String(d.nextAction||'').trim(),nextActionDate:d.nextActionDate||''};
+ const base={type:d.type||a.type,date:d.date||a.date,desc:d.desc!==undefined?(String(d.desc).trim()||a.desc):a.desc};
+ const cambiaBase=base.type!==a.type||base.date!==a.date||base.desc!==a.desc;
+ if(!cambiaBase&&nuevo.result===(a.result||'')&&nuevo.nextAction===(a.nextAction||'')&&nuevo.nextActionDate===(a.nextActionDate||''))return null;
+ a.hist=a.hist||[];a.hist.push({at:todayIso,type:a.type,date:a.date,desc:a.desc,result:a.result||'',nextAction:a.nextAction||'',nextActionDate:a.nextActionDate||'',by:S.currentUser});
+ const lab='Actividad '+a.type+' '+fmtDate(a.date)+' ('+ref+')';
+ if(cambiaBase){if(base.type!==a.type)audit(lab,'Tipo',a.type,base.type);if(base.date!==a.date)audit(lab,'Fecha',a.date,base.date);if(base.desc!==a.desc)audit(lab,'Descripción',a.desc,base.desc);Object.assign(a,base)}
+ if(nuevo.result!==(a.result||''))audit(lab,'Resultado',a.result,nuevo.result);
+ if(nuevo.nextActionDate!==(a.nextActionDate||'')||nuevo.nextAction!==(a.nextAction||''))audit(lab,'Próxima acción',(a.nextAction||'')+' '+(a.nextActionDate||''),nuevo.nextAction+' '+nuevo.nextActionDate);
+ Object.assign(a,nuevo);
+ if(d.mkTask&&nuevo.nextAction&&nuevo.nextActionDate&&a.entityType!=='company'){
+  if(t){if(tareaMovible(t)){if(t.due!==nuevo.nextActionDate||t.title!==nuevo.nextAction){t.title=nuevo.nextAction;t.due=nuevo.nextActionDate;auto.push('tarea movida al '+fmtDate(t.due))}a.taskId=t.id}}
+  else{const nt={id:uid('t'),title:nuevo.nextAction,entityType:a.entityType,entityId:a.entityId,assigneeId:actResponsable(a),priority:'Media',due:nuevo.nextActionDate,status:'Pendiente',createdAt:todayIso};S.tasks.push(nt);a.taskId=nt.id;auto.push('tarea creada')}
+ }
+ if(a.entityType==='lead'&&nuevo.nextAction&&nuevo.nextActionDate){const l=byId(S.leads,a.entityId);if(l&&canEdit(l)){l.nextAction=nuevo.nextAction;l.nextActionDate=nuevo.nextActionDate;auto.push('próxima acción del prospecto actualizada')}}
+ return auto}
 
 /* ============ VISTA: MI DÍA ============ */
 function viewHoy(){
@@ -1595,6 +1640,7 @@ function drawerLead(id){
   <button class="btn" data-action="open" data-type="company" data-id="${l.companyId}">Ficha 360° de la empresa</button>
   ${STORE.almacen&&STORE.almacen.tipo==='sqlite'?`<button class="btn" data-action="historial" data-tabla="leads" data-id="${l.id}">Historial de cambios</button>`:''}
  </div>
+ ${actSection(acts,'lead:'+l.id)}
  <form data-form="lead" data-id="${l.id}" id="leadForm"><fieldset ${ed?'':'disabled'}>
  <div class="section"><h2>Datos del prospecto</h2><div class="fgrid">
   <label class="f full">Nombre del prospecto<input name="name" value="${esc(l.name||'')}" required placeholder="Qué se busca en este cliente, p. ej. CCTV Parque FV Taltal"></label>
@@ -1611,8 +1657,7 @@ function drawerLead(id){
  <div class="section"><h2>Lead scoring</h2><div class="fgrid" style="margin-bottom:12px">${SCORE_VARS.filter(v=>!v.auto).map(v=>`<label class="f">${esc(v.label)} <span class="hint">hasta ${v.max} pts</span><select name="v_${v.k}" data-score>${opt(v.opts.map((o,i)=>[String(i),o[0]]),l.vars?.[v.k],'Sin dato')}</select></label>`).join('')}</div>
  <div id="scoreBox">${scoreBox(l)}</div></div>
  ${ed?'<div class="form-foot"><button class="btn pri" type="submit">Guardar cambios</button></div>':''}
- </fieldset></form>
- <div class="section"><h2>Historial</h2>${timeline(acts)}</div>`;
+ </fieldset></form>`;
 }
 
 /* ============ VISTA: PLANES ============ */
@@ -1820,6 +1865,7 @@ function drawerOpp(id){
   
   
  </div>
+ ${actSection(acts,'opp:'+o.id)}
  <div class="section"><h2>${enExcel(o)?'Estatus (Excel de Gerencia)':oppCRM(o)?'Estatus':'Pendiente del Excel'}${oppCRM(o)&&canEdit(o)?` <button class="btn sm" data-action="editOpp" data-id="${o.id}">Editar</button>`:''}</h2>
  ${enExcel(o)?`<p class="muted sm" style="margin:0 0 8px">Solo lectura. Importación del ${esc(fmtDate((S.fxLast&&S.fxLast.at)||''))}; para cambiarlo, actualiza el Excel e impórtalo.</p>`:oppCRM(o)?'':`<div class="warnbox warn">Creada antes en el CRM, sin código OP: no suma al pipeline. Si sigue vigente, créala de nuevo con «Nueva oportunidad».</div>`}
  <div class="kv">
@@ -1851,7 +1897,6 @@ function drawerOpp(id){
  ${['need','pain','strategy','risks','competitors','currentProvider'].some(k=>o[k])?`<div class="section"><h2>Contexto registrado antes</h2><p class="muted sm">Notas de una versión anterior, solo consulta.</p>${[['need','Necesidad'],['pain','Dolor del cliente'],['strategy','Estrategia'],['risks','Riesgos'],['competitors','Competencia'],['currentProvider','Proveedor actual']].filter(([k])=>o[k]).map(([k,l])=>`<div class="sm" style="padding:3px 0"><strong>${l}:</strong> ${esc(o[k])}</div>`).join('')}</div>`:''}
  ${(()=>{const fl=oppFollow(o);return fl?`<div class="warnbox ${fl.sev==='bad'?'bad':fl.sev==='warn'?'warn':'info'}"><strong>Oferta entregada.</strong> ${esc(fl.label)}.</div>`:''})()}
  ${offers.length?`<div class="section"><h2>Ofertas registradas antes (solo consulta)</h2><p class="muted sm">Del módulo de ofertas anterior, con código OF. La oportunidad ya es la oferta: no se crean nuevas.</p>${offers.map(f=>{const fl=offerFollow(f);return `<button class="row-item" data-action="open" data-type="offer" data-id="${f.id}"><span class="ri-main"><span>${esc(f.code)} V${f.versions.length}</span><span class="muted sm">${f.sentAt?'Enviada '+fmtDate(f.sentAt):'No enviada'}</span></span><span class="ri-right"><span class="b">${esc(f.status)}</span> ${fl?sevBadge(fl.sev,fl.label):''}<br>${mm(offerNet(f))}</span></button>`}).join('')}</div>`:''}
- <div class="section"><h2>Timeline</h2>${timeline(acts)}</div>
  ${(o.history||[]).length?`<div class="section"><h2>Cambios de etapa</h2>${o.history.slice().reverse().map(h=>`<div class="sm" style="padding:4px 0">${fmtDate(h.date)}: ${esc(stageOf(h.from)?.name||h.from)} a ${esc(stageOf(h.to)?.name||h.to)} (${h.days} días en la etapa anterior), ${esc(uname(h.by))}</div>`).join('')}</div>`:''}`;
 }
 
@@ -2424,6 +2469,7 @@ const ACTIONS={
  newMeeting:d=>{closeNav();modalMeeting(d.ent,d.contact)},
  addMail:d=>{const i=$('#mtTo');if(!i)return;const l=splitEmails(i.value);if(!l.includes(d.mail))l.push(d.mail);i.value=l.join(', ')},
  setUI:d=>{UI[d.k]=d.v;render()},
+ editActResult:(d,el,e)=>{if(e)e.preventDefault();modalActResult(d.id)},
  doneTask:(d,el,e)=>{e.stopPropagation();const t=byId(S.tasks,d.id);if(!t)return;if(t.status==='Completada'){t.status='Pendiente';t.completedAt=''}else{t.status='Completada';t.completedAt=todayIso;audit('Tarea: '+t.title,'Estado','Pendiente','Completada')}save();render();toast(t.status==='Completada'?'Tarea completada.':'Tarea reabierta.')},
  briefing:d=>briefing(d.id),
  newCompany:()=>openModal(companyForm()),
@@ -2801,12 +2847,12 @@ const SUBMITS={
   if(!d.ent)return setErr(f,'Selecciona a qué registro corresponde la actividad.');
   const[type,id]=d.ent.split(':');let companyId='';
   if(type==='opp')companyId=byId(S.opps,id)?.companyId;else if(type==='lead')companyId=byId(S.leads,id)?.companyId;else if(type==='offer')companyId=byId(S.opps,byId(S.offers,id)?.oppId)?.companyId;else companyId=id;
-  S.activities.push({id:uid('a'),date:d.date,userId:S.currentUser,type:d.type,entityType:type,entityId:id,companyId,desc:d.desc,result:d.result,nextAction:d.nextAction,nextActionDate:d.nextActionDate});
+  const act={id:uid('a'),date:d.date,userId:S.currentUser,type:d.type,entityType:type,entityId:id,companyId,desc:d.desc,result:d.result,nextAction:d.nextAction,nextActionDate:d.nextActionDate};S.activities.push(act);
   const auto=[];
   if(d.nextAction&&d.nextActionDate){
-   if(type==='opp'&&!d.mkTask){S.tasks.push({id:uid('t'),title:d.nextAction,entityType:'opp',entityId:id,assigneeId:S.currentUser,priority:'Media',due:d.nextActionDate,status:'Pendiente',createdAt:todayIso});auto.push('tarea creada en la oportunidad')}
+   if(type==='opp'&&!d.mkTask){const nt={id:uid('t'),title:d.nextAction,entityType:'opp',entityId:id,assigneeId:S.currentUser,priority:'Media',due:d.nextActionDate,status:'Pendiente',createdAt:todayIso};S.tasks.push(nt);act.taskId=nt.id;auto.push('tarea creada en la oportunidad')}
    if(type==='lead'){const l=byId(S.leads,id);l.nextAction=d.nextAction;l.nextActionDate=d.nextActionDate;auto.push('próxima acción del prospecto actualizada')}
-   if(d.mkTask){S.tasks.push({id:uid('t'),title:d.nextAction,entityType:type,entityId:id,assigneeId:S.currentUser,priority:'Media',due:d.nextActionDate,status:'Pendiente',createdAt:todayIso});auto.push('tarea creada')}
+   if(d.mkTask){const nt={id:uid('t'),title:d.nextAction,entityType:type,entityId:id,assigneeId:S.currentUser,priority:'Media',due:d.nextActionDate,status:'Pendiente',createdAt:todayIso};S.tasks.push(nt);act.taskId=nt.id;auto.push('tarea creada')}
   }
   if(type==='lead')leadAuto(byId(S.leads,id),d.type,d.date,auto);
   if(MEETING_TYPES.includes(d.type)&&d.date<=todayIso){S.tasks.push({id:uid('t'),title:'Enviar minuta y acordar próximo paso',entityType:type,entityId:id,assigneeId:S.currentUser,priority:'Alta',due:addDays(1),status:'Pendiente',createdAt:todayIso});auto.push('tarea de minuta para mañana')}
@@ -2814,6 +2860,11 @@ const SUBMITS={
   if(d.date<=todayIso&&advanceTargets(companyId,d.type))auto.push('plan de prospección actualizado');
   save();closeModal();render();toast('Actividad registrada'+(auto.length?': '+auto.join(', ')+'.':'.'));
  },
+ actResult:(d,f)=>{const a=byId(S.activities,f.dataset.id);if(!a)return closeModal();
+  if(!puedeEditarAct(a)){closeModal();return toast('No puedes editar esta actividad.')}
+  if(d.mkTask&&d.nextAction&&!d.nextActionDate)return setErr(f,'Indica la fecha de la próxima acción.');
+  const auto=actualizarResultado(a,d);if(auto===null){closeModal();return toast('Sin cambios.')}
+  save();closeModal();render();toast('Actividad actualizada'+(auto.length?': '+auto.join(', ')+'.':'.'))},
  meeting:(d,f)=>{
   if(!d.ent)return setErr(f,'Selecciona a qué registro corresponde la reunión.');
   const to=splitEmails(d.to);const bad=to.filter(x=>!isEmail(x));if(bad.length)return setErr(f,'Correo no válido: '+bad.join(', '));

@@ -61,8 +61,8 @@ $ok((bool) $por($n->leads, 'Lnuevo') && !$por($n->leads, 'Lajeno') && count($av)
 $ok(!$por($n->tasks, 'Tx') && $av, 'no asigna tareas a otra persona');
 [$n, $av] = $guardar('eN1', function ($v) { $v->tasks = array_values(array_filter($v->tasks, function ($t) { return $t->id !== 'T_eN1'; })); });
 $ok(!$por($n->tasks, 'T_eN1') && count($n->tasks) === 11 && !$av, 'elimina su tarea sin tocar las demás');
-[$n, $av] = $guardar('eN1', function ($v) use ($por) { $por($v->activities, 'A_sN_en_eN1')->desc = 'cambiada'; });
-$ok($por($n->activities, 'A_sN_en_eN1')->desc === 'Revisión con vinculo-eN1' && $av, 've la gestión de su subgerente pero no la cambia');
+[$n, $av] = $guardar('eN1', function ($v) use ($por) { $por($v->activities, 'A_sN_en_eN1')->result = 'Esperando respuesta'; });
+$ok($por($n->activities, 'A_sN_en_eN1')->result === 'Esperando respuesta' && !$av, 'actualiza el resultado de la gestión que su subgerente registró en su oportunidad');
 [$n, $av] = $guardar('eN1', function ($v) { $v->activities = array_values(array_filter($v->activities, function ($a) { return $a->id !== 'A_sN_en_eN1'; })); });
 $ok((bool) $por($n->activities, 'A_sN_en_eN1') && $av, 'ni la elimina');
 [$n, $av] = $guardar('eN1', function ($v) { $v->invoices[] = (object) ['id' => 'Inueva', 'oppId' => 'O_eN1', 'name' => 'Factura 2']; $v->invoices[] = (object) ['id' => 'Iajena', 'oppId' => 'O_eN2', 'name' => 'Factura ajena']; });
@@ -139,7 +139,30 @@ $err = '';
 try { $guardar('eN1', function ($v) { $v->leads[] = (object) ['name' => 'sin id']; }); } catch (PermRechazo $e) { $err = $e->getMessage(); }
 $ok($err !== '', 'datos mal formados (registro sin id) se rechazan: «' . $err . '»');
 
-echo "7. Historial y recuperación\n";
+echo "7. Actividades editables (resultado y próxima acción que se actualizan después)\n";
+[$n, $av] = $guardar('eN1', function ($v) use ($por) { $a = $por($v->activities, 'A_sN_en_eN1'); $a->userId = 'eN1'; });
+$ok($por($n->activities, 'A_sN_en_eN1')->userId === 'sN' && $av, 'el dueño de la oportunidad no cambia quién registró la gestión');
+[$n, $av] = $guardar('eN1', function ($v) use ($por) { $a = $por($v->activities, 'A_sN_en_eN1'); $a->entityId = 'O_eN2'; $a->desc = 'movida'; });
+$ok($por($n->activities, 'A_sN_en_eN1')->entityId === 'O_eN1' && $av, 'ni la mueve a otro registro');
+[$n, $av] = $guardar('eN2', function ($v) use ($por) { $v->activities[] = (object) ['id' => 'A_eN1', 'userId' => 'eN1', 'entityType' => 'opp', 'entityId' => 'O_eN1', 'desc' => 'pisada', 'result' => 'x']; });
+$ok($por($n->activities, 'A_eN1')->desc !== 'pisada' && $av, 'un ejecutivo no edita la actividad de otro ejecutivo');
+[$n, $av] = $guardar('sN', function ($v) use ($por) { $a = $por($v->activities, 'A_eN1'); $a->result = 'Respondió'; $a->nextAction = 'Visita'; $a->nextActionDate = '2026-12-05';
+    $a->hist = [(object) ['at' => '2026-11-26', 'result' => '', 'by' => 'sN']]; $por($v->tasks, 'T_eN1')->due = '2026-12-05'; });
+$ok($por($n->activities, 'A_eN1')->result === 'Respondió' && count($por($n->activities, 'A_eN1')->hist) === 1 && !$av, 'la subgerente actualiza la actividad de un ejecutivo de su equipo, con historial');
+$ok($por($n->tasks, 'T_eN1')->due === '2026-12-05' && $por($n->tasks, 'T_eN1')->assigneeId === 'eN1', 'y corre su tarea de seguimiento, que conserva su responsable');
+[$n, $av] = $guardar('sS', function ($v) use ($por) { $v->activities[] = (object) ['id' => 'A_eN1', 'userId' => 'eN1', 'entityType' => 'opp', 'entityId' => 'O_eN1', 'result' => 'otra subgerencia']; });
+$ok(($por($n->activities, 'A_eN1')->result ?? '') !== 'otra subgerencia' && $av, 'la subgerente de otro equipo no la edita');
+$b = permCopia($full); $b->tasks[] = (object) ['id' => 'T_sN_en_eN1', 'title' => 'Seguimiento de sN', 'entityType' => 'opp', 'entityId' => 'O_eN1', 'assigneeId' => 'sN', 'status' => 'Pendiente', 'due' => '2026-12-01'];
+[$n, $av] = $guardar('eN1', function ($v) use ($por) { $por($v->tasks, 'T_sN_en_eN1')->due = '2026-12-20'; }, $b);
+$ok($por($n->tasks, 'T_sN_en_eN1')->due === '2026-12-01' && $av, 'el ejecutivo no corre una tarea que es de su subgerente');
+[$n, $av] = $guardar('g1', function ($v) use ($por) { $por($v->activities, 'A_eS3')->desc = 'Corregida por gerencia'; });
+$ok($por($n->activities, 'A_eS3')->desc === 'Corregida por gerencia' && !$av, 'el gerente edita cualquier actividad');
+$b = permCopia($full); $b->activities[] = (object) ['id' => 'A_eN2_emp', 'userId' => 'eN2', 'entityType' => 'company', 'entityId' => 'C1', 'companyId' => 'C1', 'type' => 'Visita a terreno', 'desc' => 'Visita', 'date' => '2026-11-22'];
+$ok(!$por(permVista($b, $ctx('eN1'))->activities, 'A_eN2_emp') && (bool) $por(permVista($b, $ctx('sN'))->activities, 'A_eN2_emp'), 'en una empresa compartida el ejecutivo no ve las gestiones de otro (la subgerente sí)');
+[$n, $av] = $guardar('eN1', function ($v) { $v->activities[] = (object) ['id' => 'A_eN2_emp', 'userId' => 'eN2', 'entityType' => 'company', 'entityId' => 'C1', 'companyId' => 'C1', 'desc' => 'pisada']; }, $b);
+$ok($por($n->activities, 'A_eN2_emp')->desc === 'Visita' && $av, 'ni la puede pisar');
+
+echo "8. Historial y recuperación\n";
 $ok(permVeRegistro($ctx('eN1'), $full, 'opps', $por($full->opps, 'O_eN1')) && !permVeRegistro($ctx('eN1'), $full, 'opps', $por($full->opps, 'O_eN2')), 'el historial de un registro solo para quien lo ve');
 $ok(!permVeRegistro($ctx('eN1'), $full, 'doc', (object) []) && permVeRegistro($ctx('g1'), $full, 'doc', (object) []), 'el historial de la configuración, solo gerente y administrador');
 $ok(permRecupera($ctx('sN'), $full, 'leads', $por($full->leads, 'L_eN2')) && !permRecupera($ctx('sN'), $full, 'leads', $por($full->leads, 'L_eS2')), 'el subgerente recupera lo eliminado de su equipo, no de otro');
