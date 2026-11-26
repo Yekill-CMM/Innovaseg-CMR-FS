@@ -185,6 +185,26 @@ $ok($c === 422 && json_encode($ver('ad')->data) === $todoAntes, 'con datos mal f
 [$c, $r] = $req('POST', '', ['baseRev' => 1, 'data' => $d->data], $S['eN1']);
 $ok($c === 409, 'la copia completa sobre una versión vieja sigue respondiendo 409 (no se puede mezclar sin saber qué cambió)');
 
+echo "10. Mover de etapa desde el Kanban (guardado por registro)\n";
+$d = $ver('eN2'); $a = $por($d->data->opps, 'O_eN2'); $b = $cp($a); $b->stage = 'seguimiento'; $b->prob = 60;
+[$c, $r] = $guardar('eN2', $d->rev, [['opps', 'O_eN2', $a, $b]]);
+$o = $por($ver('ad')->data->opps, 'O_eN2');
+$ok($c === 200 && empty($r->avisos) && $o->stage === 'seguimiento', 'Tomás mueve su oportunidad a Upside');
+[, $h] = $req('GET', '?accion=historial&tabla=opps&id=O_eN2', null, $S['sN']);
+$ult = $h->historial[0] ?? null;
+$ok($ult && $ult->usuario === 'eN2' && strpos(json_encode($ult, JSON_UNESCAPED_UNICODE), 'seguimiento') !== false, 'el historial muestra que Tomás la movió y a qué etapa');
+$dG = $ver('g1'); $a = $por($dG->data->opps, 'O_eN2'); $b = $cp($a); $b->stage = 'negociacion';
+[$c, $r] = $guardar('eN1', $ver('eN1')->rev, [['opps', 'O_eN2', $a, $b]]);
+$ok($por($ver('ad')->data->opps, 'O_eN2')->stage === 'seguimiento' && strpos(json_encode($r, JSON_UNESCAPED_UNICODE), 'marca-eN2') === false, 'Paula no mueve la de Tomás aunque mande el registro (y no recibe sus datos)');
+$d = $ver('eN2'); $a = $por($d->data->opps, 'O_eN2'); $b = $cp($a); $b->stage = 'adjudicada'; $b->status = 'ganada'; $b->wonAt = date('Y-m-d');
+[$c, $r] = $guardar('eN2', $d->rev, [['opps', 'O_eN2', $a, $b]]);
+$o = $por($ver('ad')->data->opps, 'O_eN2');
+$ok($o->status === 'abierta' && $o->stage === 'seguimiento' && !empty($r->avisos) && strpos(implode(' ', $r->avisos), 'contrato u orden de compra') !== false, 'a Booking sin contrato u OC no pasa y Tomás recibe el aviso');
+$d = $ver('eN2'); $a = $por($d->data->opps, 'O_eN2'); $b = $cp($a); $b->stage = 'adjudicada'; $b->status = 'ganada'; $b->wonAt = date('Y-m-d'); $b->wonDoc = 'OC 4500777'; $b->prob = 100;
+[$c, $r] = $guardar('eN2', $d->rev, [['opps', 'O_eN2', $a, $b]]);
+$o = $por($ver('ad')->data->opps, 'O_eN2');
+$ok($c === 200 && empty($r->avisos) && $o->status === 'ganada' && $o->wonDoc === 'OC 4500777', 'con fecha y contrato u OC queda en Booking');
+
 // Reglas sin servidor: mezcla de un registro
 $m = guardMezclarRegistro((object) ['a' => 1, 'b' => 1], (object) ['a' => 2, 'b' => 1], (object) ['a' => 1, 'b' => 3], []);
 $ok($m && $m->a === 2 && $m->b === 3, 'mezcla: cada lado conserva el campo que cambió');

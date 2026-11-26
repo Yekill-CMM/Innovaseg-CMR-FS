@@ -233,6 +233,7 @@ function permFusionarLista($tabla, $full, $previo, $nuevo, $ctx, $idx) {
             $da = permDueno($tabla, $antes, $idx); $dn = permDueno($tabla, $x, $idx);
             if (!permEnAlcance($ctx, $da)) { permNo($ctx, 'cambiar', $tabla, $antes); continue; }
             if ($dn !== $da && !permAsignable($ctx, $dn)) { permNo($ctx, $tabla === 'tasks' ? 'asignar a esa persona' : 'traspasar a esa persona', $tabla, $antes); continue; }
+            if ($tabla === 'opps' && ($falta = permOppIncompleta($antes, $x)) !== '') { $ctx->avisos[] = 'No se guardó el cambio de la oportunidad «' . permNombre($tabla, $antes) . "»: $falta"; continue; }
         }
         $reemplazo[$id] = $x;
     }
@@ -246,6 +247,7 @@ function permFusionarLista($tabla, $full, $previo, $nuevo, $ctx, $idx) {
         elseif (in_array($tabla, PERM_PUBLICAS, true)) { if (!$ctx->admin) continue; }
         elseif ($compartida) { foreach (PERM_TRAZA as $c) unset($x->$c); $x->createdBy = $ctx->id; }
         elseif (!permAsignable($ctx, permDueno($tabla, $x, $idx)) && !($ctx->alc === null && permDueno($tabla, $x, $idx) === '')) { permNo($ctx, 'crear', $tabla, $x); continue; }
+        if ($tabla === 'opps' && ($falta = permOppIncompleta(null, $x)) !== '') { $ctx->avisos[] = 'No se guardó la oportunidad nueva «' . permNombre($tabla, $x) . "»: $falta"; continue; }
         $altas[$id] = $x;
     }
     // Resultado: el orden de los datos completos, con las altas detrás del registro que las antecede en la pantalla
@@ -260,6 +262,32 @@ function permFusionarLista($tabla, $full, $previo, $nuevo, $ctx, $idx) {
         $res = $out;
     }
     return $res;
+}
+
+/* Etapas y estados de una oportunidad. Moverla a Booking, perdida o postergada exige sus datos, venga el cambio
+   del Kanban, de la ficha o de otro cliente: sin ellos el servidor deja la versión que tenía y avisa. */
+const PERM_ETAPAS = ['identificada', 'calificada', 'levantamiento', 'ingenieria', 'oferta', 'seguimiento', 'negociacion', 'adjudicada'];
+const PERM_ESTADOS = ['abierta', 'ganada', 'perdida', 'postergada'];
+function permFecha($v) { return is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) === 1; }
+// '' si está bien; si no, qué falta. $antes = null en un alta.
+function permOppIncompleta($antes, $x) {
+    $st = permTxt($x, 'status') === '' ? 'abierta' : permTxt($x, 'status');
+    $stA = $antes === null ? null : (permTxt($antes, 'status') === '' ? 'abierta' : permTxt($antes, 'status'));
+    $et = permTxt($x, 'stage');
+    if ($et !== '' && ($antes === null || $et !== permTxt($antes, 'stage')) && !in_array($et, PERM_ETAPAS, true)) return 'la etapa «' . $et . '» no existe.';
+    if ($st === $stA) return '';
+    if (!in_array($st, PERM_ESTADOS, true)) return 'el estado «' . $st . '» no existe.';
+    if ($st === 'ganada') {
+        if ($et !== 'adjudicada') return 'una oportunidad ganada va en Booking.';
+        if (!permFecha(permTxt($x, 'wonAt'))) return 'para pasar a Booking falta la fecha de adjudicación.';
+        if (trim(permTxt($x, 'wonDoc')) === '') return 'para pasar a Booking falta el contrato u orden de compra.';
+    }
+    if ($st === 'perdida') {
+        if (trim(permTxt($x, 'lossReason')) === '') return 'para marcarla perdida falta el motivo.';
+        if (mb_strlen(trim(permTxt($x, 'lossComment'))) < 10) return 'para marcarla perdida falta el comentario (qué pasó, al menos 10 caracteres).';
+    }
+    if ($st === 'postergada' && !permFecha(permTxt($x, 'nextActionDate'))) return 'para postergarla falta la fecha en que se reactiva.';
+    return '';
 }
 
 // ¿Puede ver el historial de este registro (vigente o eliminado)? $datos = sus últimos datos

@@ -165,6 +165,14 @@ header .btn.pri{background:#fff;color:#0D2A46;border-color:#fff}
 .card .c-next{margin-top:7px;padding-top:7px;border-top:1px dashed var(--line);font-size:12px;color:var(--ink-2)}
 .card .c-next.bad{color:var(--bad)}
 .card.dragging{opacity:.5}
+.card .c-move{display:flex;justify-content:flex-end;margin-top:7px}
+.card:not([data-drag]){cursor:pointer}
+.opp-exits{margin-top:12px}
+.opp-exits .col{min-height:64px}
+.move-list{display:grid;gap:6px;margin-top:12px}
+.move-list .btn{justify-content:flex-start;text-align:left;width:100%}
+.move-list .btn[disabled]{opacity:.55;cursor:default}
+.move-list .sep{border-top:1px solid var(--line);margin:4px 0}
 /* layers */
 .overlay{position:fixed;inset:0;background:rgba(8,18,28,.45);z-index:20}
 .drawer{position:fixed;top:0;right:0;height:100%;width:min(660px,100%);background:var(--bg);z-index:21;overflow:auto;box-shadow:-12px 0 40px rgba(0,0,0,.2);padding:calc(16px + env(safe-area-inset-top,0px)) 20px calc(30px + env(safe-area-inset-bottom,0px))}
@@ -1739,9 +1747,11 @@ function drawerContact(id){
 }
 
 /* ============ VISTA: OPORTUNIDADES ============ */
+// ¿Puede esta persona mover la oportunidad en el Kanban? (el servidor vuelve a revisarlo al guardar)
+const oppMovible=o=>!!o&&o.status==='abierta'&&oppCRM(o)&&!enExcel(o)&&canEdit(o);
 function oppCard(o){
- const miss=missing(o);const d=daysFrom(o.stageEnteredAt);
- return `<div class="card ${miss.length?'flag':''} ${invClass(o)}" data-action="open" data-type="opp" data-id="${o.id}" tabindex="0">
+ const miss=missing(o);const d=daysFrom(o.stageEnteredAt);const mov=oppMovible(o);
+ return `<div class="card ${miss.length?'flag':''} ${invClass(o)}"${mov?` draggable="true" data-drag="${o.id}"`:''} data-action="open" data-type="opp" data-id="${o.id}" tabindex="0">
   <div class="c-co">${esc(cname(o.companyId))}</div><div class="c-name">${esc(o.name)}</div>
   <div class="c-row"><span class="c-amt">${mm(tcv(o))}</span><span>${o.prob}%</span></div>
   ${tipoDe(o)?`<div class="c-row"><span class="muted">${esc(tipoLabel(o))}</span></div>`:''}
@@ -1750,6 +1760,7 @@ function oppCard(o){
   <div class="c-row"><span>${esc(uname(o.ownerId))}</span>${o.currency!=='CLP'?`<span class="b">${o.currency}</span>`:''}</div>
   ${fxAusente(o)?`<div class="c-row"><span class="b b-warn" title="No vino en la importación del funnel del ${esc(fmtDate(o.fx.ausente))}">No vino en el funnel</span></div>`:''}
   <div class="c-next ${miss.length?'bad':''}">${(()=>{const t=nextTask(o);return t?esc(t.title)+', '+fmtDate(t.due)+(t.due<todayIso?' (vencida)':''):o.status==='abierta'?'Sin tarea pendiente':'Sin tareas pendientes'})()}</div>
+  ${mov?`<div class="c-move"><button type="button" class="btn sm" data-action="moveMenu" data-id="${o.id}" aria-label="Mover ${esc(o.name)} a otra etapa">Mover ▸</button></div>`:''}
  </div>`;
 }
 function filteredOpps(){let os=mine(S.opps);if(UI.oppIndustry)os=os.filter(o=>byId(S.companies,o.companyId)?.industry===UI.oppIndustry);return os}
@@ -1785,10 +1796,11 @@ function viewOpps(){
   const cerrado=won.filter(enAnio),delMes=esHoy?cerrado.filter(o=>(o.wonAt||'').slice(0,7)===mes):[];
   const pend=sum(bkCards,saldo);
   const facY=invoicedIn(year),facPar=sum(myInvoices().filter(x=>(x.date||'').startsWith(year)&&bkCards.some(o=>o.id===x.oppId)),x=>x.net||0);
-  const col=(name,n,amt,desc,cards)=>`<div class="col"><div class="col-h"><h2>${esc(name)} <span class="muted">${n}</span></h2><span class="muted">${amt}</span></div><div class="muted sm" style="margin:0 4px 8px">${desc}</div>${cards.map(oppCard).join('')||'<div class="muted sm" style="padding:8px 4px">Sin oportunidades</div>'}</div>`;
-  return head+avisoAus+avisoFuera+`<div class="kanban">${FUNNEL_STAGES.filter(s=>s.id!=='adjudicada').map(s=>{const cards=open.filter(o=>o.stage===s.id);return col(s.name,cards.length,mm(sum(cards,tcv)),esc(STAGE_DESC[s.id]||''),cards)}).join('')}
-  ${col(STAGES[7].name,bkCards.length,mm(sum(cerrado,tcv)),`${esc(STAGE_DESC.adjudicada)} · año ${year}<br><strong>Total cerrado ${year}: ${mm(sum(cerrado,tcv))}</strong> (${cerrado.length} ${cerrado.length===1?'negocio':'negocios'})${esHoy?`<br><strong>Total mes: ${mm(sum(delMes,tcv))}</strong> (${delMes.length} ${delMes.length===1?'negocio':'negocios'})`:''}<br>Por facturar: ${mm(pend)}${prev.length?`<br><span class="muted">${prev.length} de ${prevYrs.join(' y ')} con saldo por facturar (${mm(sum(prev,saldo))}): ${prevYrs.map(y=>`<a href="#" data-action="setUI" data-k="oppYear" data-v="${y}">ver ${y}</a>`).join(' · ')}</span>`:''}`,bkCards)}
-  ${col('Facturado',fcCards.length,mm(facY),`Facturadas al 100 % · año ${year}<br><strong>Total facturado ${year}: ${mm(facY)}</strong>${facPar?`<br>Incluye ${mm(facPar)} de facturas parciales de negocios que siguen en Booking`:''}<br><span class="muted">Neto de facturas emitidas y pagadas, por fecha de factura</span>`,fcCards)}</div>`;
+  const col=(name,n,amt,desc,cards,drop)=>`<div class="col"${drop?` data-drop="${drop}"`:''}><div class="col-h"><h2>${esc(name)} <span class="muted">${n}</span></h2><span class="muted">${amt}</span></div><div class="muted sm" style="margin:0 4px 8px">${desc}</div>${cards.map(oppCard).join('')||'<div class="muted sm" style="padding:8px 4px">Sin oportunidades</div>'}</div>`;
+  return head+avisoAus+avisoFuera+`<div class="kanban">${FUNNEL_STAGES.filter(s=>s.id!=='adjudicada').map(s=>{const cards=open.filter(o=>o.stage===s.id);return col(s.name,cards.length,mm(sum(cards,tcv)),esc(STAGE_DESC[s.id]||''),cards,s.id)}).join('')}
+  ${col(STAGES[7].name,bkCards.length,mm(sum(cerrado,tcv)),`${esc(STAGE_DESC.adjudicada)} · año ${year}<br><strong>Total cerrado ${year}: ${mm(sum(cerrado,tcv))}</strong> (${cerrado.length} ${cerrado.length===1?'negocio':'negocios'})${esHoy?`<br><strong>Total mes: ${mm(sum(delMes,tcv))}</strong> (${delMes.length} ${delMes.length===1?'negocio':'negocios'})`:''}<br>Por facturar: ${mm(pend)}${prev.length?`<br><span class="muted">${prev.length} de ${prevYrs.join(' y ')} con saldo por facturar (${mm(sum(prev,saldo))}): ${prevYrs.map(y=>`<a href="#" data-action="setUI" data-k="oppYear" data-v="${y}">ver ${y}</a>`).join(' · ')}</span>`:''}`,bkCards,'adjudicada')}
+  ${col('Facturado',fcCards.length,mm(facY),`Facturadas al 100 % · año ${year}<br><strong>Total facturado ${year}: ${mm(facY)}</strong>${facPar?`<br>Incluye ${mm(facPar)} de facturas parciales de negocios que siguen en Booking`:''}<br><span class="muted">Neto de facturas emitidas y pagadas, por fecha de factura</span>`,fcCards)}</div>
+  ${open.some(oppMovible)?`<div class="lead-exits opp-exits"><div class="col" data-drop="perdida"><div class="col-h"><h2>Perdida</h2></div><div class="muted sm" style="margin:0 4px">Suelta aquí una oportunidad para cerrarla como perdida. Pide motivo y comentario.</div></div><div class="col" data-drop="postergada"><div class="col-h"><h2>Postergada</h2></div><div class="muted sm" style="margin:0 4px">Suelta aquí para postergarla. Pide la fecha en que se reactiva y el motivo.</div></div></div><p class="muted sm" style="margin:8px 2px 0">Arrastra una tarjeta a otra columna para cambiarla de etapa, o usa «Mover» (en el celular). Booking pide la fecha y el contrato u OC.</p>`:''}`;
  }
  const os=UI.oppStatus?all.filter(o=>o.status===UI.oppStatus):all;
  return head+avisoAus+avisoFuera+`<div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>Oportunidad</th><th>Empresa</th><th>Etapa</th><th class="num">Monto (TCV)</th><th class="num">Prob.</th><th class="num">Ponderado</th><th>Forecast</th><th>Cierre</th><th>Próxima tarea</th><th>Responsable</th></tr></thead><tbody>
@@ -1817,8 +1829,7 @@ function drawerOpp(id){
   ${STORE.almacen&&STORE.almacen.tipo==='sqlite'?`<button class="btn" data-action="historial" data-tabla="opps" data-id="${o.id}">Historial de cambios</button>`:''}
   <button class="btn" data-action="quick" data-ent="opp:${o.id}">Registrar actividad</button>
   <button class="btn" data-action="newMeeting" data-ent="opp:${o.id}">Agendar reunión</button>
-  
-  
+  ${oppMovible(o)?`<button class="btn" data-action="moveMenu" data-id="${o.id}">Cambiar etapa</button>`:''}
  </div>
  <div class="section"><h2>${enExcel(o)?'Estatus (Excel de Gerencia)':oppCRM(o)?'Estatus':'Pendiente del Excel'}${oppCRM(o)&&canEdit(o)?` <button class="btn sm" data-action="editOpp" data-id="${o.id}">Editar</button>`:''}</h2>
  ${enExcel(o)?`<p class="muted sm" style="margin:0 0 8px">Solo lectura. Importación del ${esc(fmtDate((S.fxLast&&S.fxLast.at)||''))}; para cambiarlo, actualiza el Excel e impórtalo.</p>`:oppCRM(o)?'':`<div class="warnbox warn">Creada antes en el CRM, sin código OP: no suma al pipeline. Si sigue vigente, créala de nuevo con «Nueva oportunidad».</div>`}
@@ -2468,6 +2479,8 @@ const ACTIONS={
  leadExit:d=>{UI.leadView='tabla';UI.leadStage=d.v;render()},
  disqLead:d=>openModal(`<h1 style="font-size:20px">Marcar como no calificado</h1><form data-form="disq" data-id="${d.id}" style="margin-top:12px"><div class="fgrid"><label class="f full">Motivo<select name="reason" required>${opt(DISQ_REASONS,'','Selecciona un motivo')}</select></label><label class="f full">Comentario<textarea name="comment" required minlength="10"></textarea></label><label class="f full" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="nurture" class="chk"> Pasar a nurturing y recontactar en 90 días</label></div><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn danger" type="submit">Confirmar</button></div></form>`),
  wonOpp:d=>openWon(d.id),
+ moveMenu:d=>moveMenu(d.id),
+ moveTo:d=>{closeModal();moveStage(d.id,d.v)},
  recForm:d=>{const o=byId(S.opps,d.id);if(!o)return;if(o.status!=='ganada'&&!recOf(o.id))return toast('El acta de recepción se prepara en oportunidades en Booking.');openModal(recForm(o.id))},
  recDoc:d=>{const o=byId(S.opps,d.id);const r=o&&recOf(o.id);if(!r)return toast('Primero prepara el acta.');const w=window.open('','_blank');if(!w)return toast('El navegador bloqueó la pestaña nueva. Permite las ventanas emergentes para este sitio.');w.document.open();w.document.write(recHtml(o,r));w.document.close()},
  metaUsar:()=>{const m=META_PEND;if(!m)return closeModal();S.config.metas=S.config.metas||{};const antes=metaPres(m.yr)?metaPresTotal(m.yr):'';S.config.metas[m.yr]={venta:m.venta,margen:m.margen||{},fuente:m.fuente||'',importado:todayIso};audit('Configuración','Meta '+m.yr,antes,metaYear(m.yr));META_PEND=null;save();saveAjustes();closeModal();render();toast(`Meta ${m.yr} cargada: ${mm(metaYear(m.yr))}.`)},
@@ -2659,7 +2672,7 @@ function updInv(t){const f=t.form;if(!f)return;const n=f.querySelector('[data-in
  if(t===n&&!i.dataset.manual)i.value=n.value===''?'':String(Math.round(num(n.value)*IVA_RATE));
  tt.value=n.value===''?'':clp(Math.round(num(n.value))+Math.round(num(i.value)))}
 const invLabel=x=>`N° ${x.number||'por emitir'} · ${clp(x.net)} neto · ${x.status}`;
-function openWon(id){openModal(`<h1 style="font-size:20px">Pasar a Booking</h1><p class="sub sm">Booking es la oferta cerrada con contrato. Si solo hay adjudicación verbal, déjala en Forecast.</p><form data-form="won" data-id="${id}" style="margin-top:12px"><div class="fgrid"><label class="f">Fecha de adjudicación<input type="date" name="date" value="${todayIso}" required></label><label class="f">Contrato u OC<input name="doc" required placeholder="N° de contrato u orden de compra"></label><label class="f full">Comentario<textarea name="comment"></textarea></label></div><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Confirmar Booking</button></div></form>`)}
+function openWon(id){const o=byId(S.opps,id);const pf=o&&oppCRM(o)&&tipoDe(o)!=='One Shot';openModal(`<h1 style="font-size:20px">Pasar a Booking</h1><p class="sub sm">Booking es la oferta cerrada con contrato. Si solo hay adjudicación verbal, déjala en Forecast.</p><form data-form="won" data-id="${id}" style="margin-top:12px"><div class="fgrid"><label class="f">Fecha de adjudicación<input type="date" name="date" value="${todayIso}" required></label><label class="f">Contrato u OC<input name="doc" required placeholder="N° de contrato u orden de compra"></label>${pf?`<label class="f">Primera facturación<input type="month" name="primeraFact" required value="${esc(o.primeraFact||'')}"><span class="hint">Mes desde el que se facturan las mensualidades.</span></label>`:''}<label class="f full">Comentario<textarea name="comment"></textarea></label></div><div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn pri" type="submit">Confirmar Booking</button></div></form>`)}
 // Una reunión agendada con un prospecto lo deja en «Reunión solicitada»; una reunión realizada, en «Reunión realizada».
 // Solo avanza (nunca retrocede) y solo si el prospecto está en una etapa activa anterior.
 function leadAuto(l,type,date,auto){if(!l||!LEAD_ACTIVE.includes(l.stage)||!MEETING_TYPES.includes(type))return;const st=date<=todayIso?'Reunión realizada':'Reunión solicitada';
@@ -2688,7 +2701,19 @@ function moveLead(id,stage){const l=byId(S.leads,id);if(!l||l.stage===stage)retu
  if(stage==='Nurturing')return ACTIONS.nurtureLead({id});
  if(cruzaCalif(l.stage,stage)&&!qualCompleta(l))return openModal(qualForm(l,stage));
  setLeadStage(l,stage);save();render();toast(`${esc(l.code||'Prospecto')} movido a ${esc(stage)}.${l.nextAction?'':' Define su próxima acción.'}`)}
-function moveStage(id,stage){const ox=byId(S.opps,id);if(ox&&enExcel(ox))return toast('La etapa viene del Excel de Gerencia. Cámbiala allá e importa el archivo.');const o=byId(S.opps,id);if(!o||o.status!=='abierta'||o.stage===stage)return;if(!canEdit(o))return toast('Solo el responsable o el gerente puede mover esta oportunidad.');if(stage==='adjudicada')return openWon(id);setStage(o,stage);o.prob=stageOf(stage).p;o.probReason='';save();render();const miss=missing(o);toast(`Movida a ${esc(stageOf(stage).name)}, probabilidad ${o.prob}%.${miss.length?' Falta '+esc(miss.join(', '))+'.':''}`)}
+function moveStage(id,stage){const o=byId(S.opps,id);if(!o)return;if(enExcel(o))return toast('La etapa viene del Excel de Gerencia. Cámbiala allá e importa el archivo.');
+ if(o.status!=='abierta')return toast('Solo se mueven las oportunidades abiertas.');
+ if(!canEdit(o))return toast('No puedes mover esta oportunidad: es de una persona fuera de tu alcance.');
+ if(stage==='perdida')return ACTIONS.lostOpp({id});if(stage==='postergada')return ACTIONS.postOpp({id});
+ if(o.stage===stage||!FUNNEL_STAGES.some(s=>s.id===stage))return;if(stage==='adjudicada')return openWon(id);
+ setStage(o,stage);o.prob=stageOf(stage).p;o.probReason='';save();render();const miss=missing(o);toast(`Movida a ${esc(stageOf(stage).name)}, probabilidad ${o.prob}%.${miss.length?' Falta '+esc(miss.join(', '))+'.':''}`)}
+// Menú para mover sin arrastrar (celular, teclado): las etapas del funnel, Booking y las salidas
+function moveMenu(id){const o=byId(S.opps,id);if(!oppMovible(o))return moveStage(id,'');
+ const b=(v,label,hint,dis)=>`<button type="button" class="btn${v==='perdida'?' danger':''}" data-action="moveTo" data-id="${o.id}" data-v="${v}"${dis?' disabled':''}><span><strong>${esc(label)}</strong>${hint?` <span class="muted sm">· ${esc(hint)}</span>`:''}</span></button>`;
+ openModal(`<h1 style="font-size:20px">Mover ${esc(o.code||'')}</h1><p class="sub sm">${esc(cname(o.companyId))}: ${esc(o.name)}. Hoy está en ${esc(stageOf(o.stage)?.name||o.stage)}.</p>
+ <div class="move-list">${FUNNEL_STAGES.filter(s=>s.id!=='adjudicada').map(s=>b(s.id,s.name,s.id===o.stage?'etapa actual':STAGE_DESC[s.id]||'',s.id===o.stage)).join('')}
+ ${b('adjudicada',stageOf('adjudicada').name,'pide fecha y contrato u OC')}<div class="sep"></div>${b('perdida','Perdida','pide motivo y comentario')}${b('postergada','Postergada','pide fecha de reactivación')}</div>
+ <div class="form-foot"><button type="button" class="btn" data-action="closeModal">Cancelar</button></div>`)}
 
 /* ============ EXPORTACIÓN ============ */
 let LAST_EXPORT=null;
@@ -2924,12 +2949,15 @@ const SUBMITS={
   if(f.dataset.id){const x=byId(S.invoices,f.dataset.id);if(!x){closeModal();return}const antes=invLabel(x);Object.assign(x,rec,{updatedAt:todayIso});if(antes!==invLabel(x)||x.comment!==rec.comment)audit(o.code,'Factura',antes,invLabel(x));save();closeModal();render();toast('Factura actualizada.');return}
   const x={id:uid('fa'),...rec,createdAt:todayIso,userId:S.currentUser};S.invoices.push(x);audit(o.code,'Factura','',invLabel(x));save();closeModal();render();
   toast(`Factura registrada. Facturado en ${o.code}: ${clp(invoicedNet(oppInvoices(o.id)))} neto.`)},
- won:(d,f)=>{const o=byId(S.opps,f.dataset.id);if(o.stage!=='adjudicada')setStage(o,'adjudicada');o.status='ganada';o.prob=100;o.wonAt=d.date;o.wonDoc=d.doc;o.nextAction='Traspaso a operaciones';o.nextActionDate=addDays(2);audit(o.code,'Estado','abierta','ganada ('+d.doc+')');
+ won:(d,f)=>{const o=byId(S.opps,f.dataset.id);if(!o||o.status!=='abierta'||!canEdit(o))return closeModal();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(d.date||''))return toast('Indica la fecha de adjudicación.');if(!String(d.doc||'').trim())return toast('Indica el N° de contrato u orden de compra.');
+  if('primeraFact' in d){if(!/^\d{4}-\d{2}$/.test(d.primeraFact||''))return toast('Indica el mes de la primera facturación.');if(d.primeraFact!==o.primeraFact){audit(o.code,'Primera facturación',o.primeraFact||'',d.primeraFact);o.primeraFact=d.primeraFact}}
+  if(o.stage!=='adjudicada')setStage(o,'adjudicada');o.status='ganada';o.prob=100;o.wonAt=d.date;o.closeDate=d.date;o.wonDoc=String(d.doc).trim();o.nextAction='Traspaso a operaciones';o.nextActionDate=addDays(2);audit(o.code,'Estado','abierta','ganada ('+d.doc+')');
   S.offers.filter(x=>x.oppId===o.id&&!CLOSED_OFFER.includes(x.status)).forEach(x=>{x.status='Aceptada'});
   S.tasks.push({id:uid('t'),title:'Traspaso a operaciones: '+o.name,entityType:'opp',entityId:o.id,assigneeId:o.ownerId,priority:'Alta',due:addDays(2),status:'Pendiente',createdAt:todayIso});
   save();closeModal();render();toast(`Adjudicada: ${mm(tcv(o))}. Se creó la tarea de traspaso a operaciones.`)},
- lost:(d,f)=>{if(d.comment.trim().length<10)return toast('El comentario debe explicar qué pasó.');const o=byId(S.opps,f.dataset.id);o.status='perdida';o.prob=0;o.lostAt=todayIso;o.lossReason=d.reason;o.lossComment=d.comment;audit(o.code,'Estado','abierta','perdida ('+d.reason+')');S.tasks.filter(t=>t.entityType==='opp'&&t.entityId===o.id&&isOpenTask(t)).forEach(t=>t.status='Cancelada');save();closeModal();render();toast('Oportunidad marcada como perdida. Sus tareas abiertas se cancelaron.')},
- post:(d,f)=>{const o=byId(S.opps,f.dataset.id);o.status='postergada';o.nextAction='Reactivar oportunidad';o.nextActionDate=d.date;o.postComment=d.comment;audit(o.code,'Estado','abierta','postergada hasta '+d.date);save();closeModal();render();toast('Oportunidad postergada.')},
+ lost:(d,f)=>{if(!d.reason)return toast('Elige el motivo de la pérdida.');if(d.comment.trim().length<10)return toast('El comentario debe explicar qué pasó.');const o=byId(S.opps,f.dataset.id);if(!o||o.status!=='abierta'||!canEdit(o))return closeModal();o.status='perdida';o.prob=0;o.lostAt=todayIso;o.lossReason=d.reason;o.lossComment=d.comment;audit(o.code,'Estado','abierta','perdida ('+d.reason+')');S.tasks.filter(t=>t.entityType==='opp'&&t.entityId===o.id&&isOpenTask(t)).forEach(t=>t.status='Cancelada');save();closeModal();render();toast('Oportunidad marcada como perdida. Sus tareas abiertas se cancelaron.')},
+ post:(d,f)=>{const o=byId(S.opps,f.dataset.id);if(!o||o.status!=='abierta'||!canEdit(o))return closeModal();if(!/^\d{4}-\d{2}-\d{2}$/.test(d.date||''))return toast('Indica la fecha en que se reactiva.');if(!String(d.comment||'').trim())return toast('Indica el motivo.');o.status='postergada';o.nextAction='Reactivar oportunidad';o.nextActionDate=d.date;o.postComment=d.comment;audit(o.code,'Estado','abierta','postergada hasta '+d.date);save();closeModal();render();toast('Oportunidad postergada.')},
  newOffer:(d)=>{const o=byId(S.opps,d.oppId);const co=byId(S.companies,o.companyId);if(!co.rut)return toast('Registra el RUT de '+esc(co.legalName)+' antes de crear la oferta.');const f={id:uid('of'),code:'OF-'+todayIso.slice(0,4)+'-'+String(++S.seq.offer).padStart(3,'0'),oppId:o.id,ownerId:o.ownerId,status:'Borrador',sentAt:'',validUntil:addDays(num(d.validity)||30),createdAt:todayIso,versions:[{n:1,net:num(d.net),date:todayIso,note:'Versión inicial',locked:false}]};S.offers.push(f);audit(f.code,'Creación','',clp(num(d.net)));save();closeModal();render();openEntity('offer',f.id);toast(`${f.code} creada como borrador.`)},
  version:(d,f)=>{const of=byId(S.offers,f.dataset.id);const cur=of.versions[of.versions.length-1];cur.locked=true;of.versions.push({n:cur.n+1,net:num(d.net),date:todayIso,note:d.note,locked:false});audit(of.code,'Monto',clp(cur.net)+' (V'+cur.n+')',clp(num(d.net))+' (V'+(cur.n+1)+')');of.status='Borrador';of.sentAt='';save();closeModal();render();toast(`V${cur.n+1} creada. Márcala como enviada cuando la despaches.`)},
  offer:(d,f)=>{const of=byId(S.offers,f.dataset.id);const cur=of.versions[of.versions.length-1];if(of.status!==d.status){audit(of.code,'Estado',of.status,d.status);if(FOLLOW_STATES.includes(d.status)&&!of.sentAt)of.sentAt=todayIso;of.status=d.status}if(of.validUntil!==d.validUntil){audit(of.code,'Vigencia',of.validUntil,d.validUntil);of.validUntil=d.validUntil}if(!cur.locked&&d.net!==undefined&&num(d.net)!==cur.net){audit(of.code,'Monto',clp(cur.net),clp(num(d.net)));cur.net=num(d.net)}save();render();toast(d.status==='Aceptada'?'Oferta aceptada. Marca la oportunidad como ganada para registrar la adjudicación.':'Oferta guardada.')},
